@@ -1,0 +1,11 @@
+node_modules
+dist
+out
+build
+.DS_Store
+.eslintcache
+*.log*
+sauvegarde-v1
+_a_supprimer
+meta-pipeline
+test-local

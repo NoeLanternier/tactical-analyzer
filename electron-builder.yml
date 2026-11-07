@@ -1,0 +1,27 @@
+appId: com.tactique.analyzer
+productName: Tactical Analyzer
+directories:
+  buildResources: resources
+files:
+  - 'out/**/*'
+asar: true
+win:
+  icon: resources/icon.ico
+  target:
+    - target: nsis
+      arch: x64
+# Programme d'installation : sans droits administrateur, raccourcis créés, lancement à la fin.
+nsis:
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Tactical Analyzer
+  runAfterFinish: true
+  artifactName: 'Tactical-Analyzer-Setup-${version}.${ext}'
+# Mises à jour automatiques : l'app installée lit les « Releases » de ce dépôt GitHub (public).
+publish:
+  provider: github
+  owner: NoeLanternier
+  repo: tactical-analyzer
+  releaseType: release

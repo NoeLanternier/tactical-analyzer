@@ -1,0 +1,70 @@
+# Construit l'app Windows et la publie dans les « Releases » GitHub à chaque modification du code.
+# L'app installée la télécharge et l'installe toute seule (voir src/main/updater.ts).
+name: Publier une version de l'app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'resources/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'electron-builder.yml'
+      - 'electron.vite.config.ts'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Installation des dépendances
+        run: npm ci
+
+      # Numéro de version automatique : 1.0.<numéro d'exécution>, toujours croissant.
+      - name: Numéro de version
+        shell: bash
+        run: npm version "1.0.${{ github.run_number }}" --no-git-tag-version --allow-same-version
+
+      - name: Vérification des types
+        run: npm run typecheck
+
+      - name: Compilation
+        run: npx electron-vite build
+
+      # electron-builder fabrique l'installeur et latest.yml (fichier lu par les mises à jour auto),
+      # sans publier : il créait parfois deux versions en double en envoyant les fichiers en parallèle.
+      - name: Programme d'installation
+        run: npx electron-builder --win --publish never
+
+      # Une seule version GitHub, créée en une fois avec tous les fichiers nécessaires.
+      - name: Publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          gh release create "v$VERSION" \
+            "dist/Tactical-Analyzer-Setup-$VERSION.exe" \
+            "dist/Tactical-Analyzer-Setup-$VERSION.exe.blockmap" \
+            "dist/latest.yml" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --notes "$(git log -1 --pretty=%s)" \
+            --latest
