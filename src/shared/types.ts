@@ -231,7 +231,8 @@ export interface GameJournal {
   lastTime: number
   /** Indice du joueur local dans players (-1 si inconnu). */
   me: number
-  players: { champ: string; raw: string; team: string }[]
+  /** position : poste selon l'API en jeu (« TOP », « UTILITY »…), vide si inconnu. */
+  players: { champ: string; raw: string; team: string; position?: string }[]
   /** [seconde, indice du joueur, objet, op] : 1 = apparu dans l'inventaire, 0 = disparu. */
   items: [number, number, number, number][]
   /** [seconde, or en poche] du joueur local. */

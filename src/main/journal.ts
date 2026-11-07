@@ -64,6 +64,9 @@ export class JournalRecorder {
       // comptés comme des achats.
       const startRaw = cur.players[idx]?.raw
       if (startRaw && p.rawChampionName && p.rawChampionName !== startRaw) return
+      // Poste : parfois vide dans les premiers relevés.
+      if (cur.players[idx] && !cur.players[idx].position && p.position)
+        cur.players[idx].position = p.position
       const next = new Map<number, number>()
       for (const it of p.items)
         next.set(it.itemID, (next.get(it.itemID) ?? 0) + Math.max(1, it.count))
@@ -96,7 +99,8 @@ export class JournalRecorder {
       players: d.allPlayers.map((p) => ({
         champ: p.championName,
         raw: p.rawChampionName,
-        team: p.team
+        team: p.team,
+        position: p.position
       })),
       items: [],
       gold: []

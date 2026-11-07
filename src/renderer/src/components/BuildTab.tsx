@@ -6,7 +6,7 @@ import { norm } from '../engine/normalize'
 import { shardName } from '../engine/runes'
 import { fmtNumber, fmtPct, gold, tr } from '../../../shared/i18n'
 import { Card, Chip, ItemIcon, RuneIcon } from './ui'
-import { AdviceCard } from './AdviceCard'
+import { AdviceCard, PickVerdictCard } from './AdviceCard'
 import { levelName } from '../engine/metaLevel'
 import { roleLabel } from '../engine/role'
 
@@ -299,6 +299,18 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
   const v = gd.version
   const inGame = live !== null
 
+  // Champion seulement survolé : avis sur ce choix dans la draft et autres choix possibles. La fiche
+  // (runes, objets) s'affiche au verrouillage ; la page de runes est quand même préparée.
+  if (!inGame && !t.draft.isLocked && t.advice) {
+    return (
+      <div className="flex flex-col gap-3">
+        <PickVerdictCard t={t} />
+        <AdviceCard t={t} />
+        <CoachCard t={t} inGame={false} />
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-3">
       {/* Champion */}
@@ -342,7 +354,6 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
       {/* Avant la partie (et en partie dans l'édition personnelle, voir t.matchup). */}
       <MatchupCard t={t} />
 
-      {!inGame && !t.draft.isLocked && <AdviceCard t={t} />}
       {!inGame && <CoachCard t={t} inGame={false} />}
 
       {t.genericBuild && (

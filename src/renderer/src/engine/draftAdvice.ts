@@ -524,3 +524,48 @@ export function computeDraftAdvice(
     known: { allies: Math.min(4, allies.length), enemies: Math.min(5, enemies.length) }
   }
 }
+
+/** Avis sur le champion survolé, comparé aux autres choix possibles dans cette draft. */
+export interface PickVerdict {
+  champ: ChampInfo
+  /** Évaluation du champion dans cette draft (null : pas de statistiques à ce poste). */
+  pick: PickAdvice | null
+  /**
+   * best : parmi les meilleurs choix ; good : proche du meilleur ; ok : jouable ; bad : nettement
+   * moins bon que d'autres choix ; unknown : champion (presque) jamais joué à ce poste.
+   */
+  level: 'best' | 'good' | 'ok' | 'bad' | 'unknown'
+  /** Écart avec le meilleur choix (points de taux de victoire estimé, ≥ 0). */
+  gap: number
+  /** Meilleur choix de la draft. */
+  best: PickAdvice | null
+  /** Choix nettement meilleurs, tes champions d'abord (3 au plus). */
+  better: PickAdvice[]
+  total: number
+}
+
+/** Écarts (en points de taux de victoire estimé) qui séparent les niveaux d'avis. */
+export const VERDICT_GAPS = { best: 0.005, good: 0.015, ok: 0.03 }
+
+export function pickVerdict(advice: DraftAdvice, champ: ChampInfo): PickVerdict {
+  const pick = advice.ranking.find((x) => x.champ.key === champ.key) ?? null
+  const best = advice.ranking[0] ?? null
+  const total = advice.ranking.length
+  if (!pick || !best) {
+    const better = advice.picks.slice(0, 3)
+    return { champ, pick: null, level: 'unknown', gap: 0, best, better, total }
+  }
+  const gap = Math.max(0, best.score - pick.score)
+  const level: PickVerdict['level'] =
+    pick.rank <= 3 || gap <= VERDICT_GAPS.best
+      ? 'best'
+      : gap <= VERDICT_GAPS.good
+        ? 'good'
+        : gap <= VERDICT_GAPS.ok && pick.winRate >= 0.485
+          ? 'ok'
+          : 'bad'
+  // Alternatives nettement meilleures (≥ 1 point), de préférence parmi tes champions.
+  const ahead = advice.ranking.filter((x) => x.score - pick.score >= 0.01 && !x.lowData)
+  const better = [...ahead.filter((x) => x.inPool), ...ahead.filter((x) => !x.inPool)].slice(0, 3)
+  return { champ, pick, level, gap, best, better, total }
+}

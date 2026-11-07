@@ -87,8 +87,8 @@ export type ChampResolver = (rawChampionName: string, championName: string) => n
 
 const num = (x: any): number => (typeof x === 'number' && Number.isFinite(x) ? x : Number(x) || 0)
 
-/** Convertit les données du client. Renvoie un motif si la partie ne peut pas être analysée. */
-/** Poste d'un joueur dans les données du client (format récent ou ancien). */
+/** Poste d'un joueur indiqué par l'historique du client (format récent ou ancien). Peu fiable :
+ * l'ancien format déduit la voie des déplacements (un top qui aide la jungle devient « JUNGLE »). */
 function participantRole(p: any): Role | null {
   const direct = roleFromPosition(p.teamPosition || p.individualPosition || '')
   if (direct) return direct
@@ -99,9 +99,88 @@ function participantRole(p: any): Role | null {
   return roleFromPosition(lane)
 }
 
+/** Zone de la carte : voie du haut, du milieu, du bas, jungle (null : base). */
+type Zone = 'top' | 'mid' | 'bot' | 'jungle'
+export function zoneOf(x: number, y: number): Zone | null {
+  if (x + y < 5200 || x + y > 24400) return null
+  if (x < 2600 || y > 12400) return 'top'
+  if (y < 2600 || x > 12400) return 'bot'
+  if (Math.abs(x - y) < 1700) return 'mid'
+  return 'jungle'
+}
+
+/**
+ * Poste de chaque joueur, du plus fiable au moins fiable : poste attribué en sélection (joueur
+ * local) ou donné par l'API en jeu (journal),
+ * Châtiment → jungle, présence sur les voies de 2 à 10 min (chronologie), indication de
+ * l'historique si elle ne contredit rien, puis déduction (support : le moins de sbires ; un seul
+ * poste manquant dans une équipe).
+ */
+export function assignRoles(
+  players: FactPlayer[],
+  fixed: Map<number, Role> = new Map(),
+  zones: Map<number, Record<Zone, number>> = new Map()
+): void {
+  for (const team of [100, 200]) {
+    const mates = players.filter((p) => p.team === team)
+    const taken = new Map<Role, FactPlayer>()
+    const take = (p: FactPlayer, r: Role | null): void => {
+      p.role = r && !taken.has(r) ? r : null
+      if (p.role) taken.set(p.role, p)
+    }
+    for (const p of mates) p.role = p.role ?? null
+    const hints = new Map(mates.map((p) => [p.pid, p.role ?? null]))
+    for (const p of mates) p.role = null
+    // 1. Poste de l'API en jeu.
+    for (const p of mates) if (fixed.has(p.pid)) take(p, fixed.get(p.pid)!)
+    // 2. Châtiment (un seul porteur).
+    const smiters = mates.filter((p) => p.smite && !p.role)
+    if (smiters.length === 1) take(smiters[0], 'jungle')
+    // 3. Présence sur les voies : le joueur le plus présent sur chaque voie libre.
+    const zoneScore = (p: FactPlayer, z: Zone): number => {
+      const v = zones.get(p.pid)
+      if (!v) return 0
+      const total = v.top + v.mid + v.bot + v.jungle
+      return total >= 3 ? v[z] / total : 0
+    }
+    for (const z of ['top', 'mid', 'jungle'] as const) {
+      if (taken.has(z)) continue
+      const best = mates
+        .filter((p) => !p.role && zoneScore(p, z) >= 0.4)
+        .sort((a, b) => zoneScore(b, z) - zoneScore(a, z))[0]
+      if (best) take(best, z)
+    }
+    const duo = mates.filter((p) => !p.role && zoneScore(p, 'bot') >= 0.4)
+    if (duo.length === 2 && !taken.has('bot') && !taken.has('support')) {
+      const [carry, sup] = [...duo].sort((a, b) => b.cs - a.cs)
+      take(carry, 'bot')
+      take(sup, 'support')
+    }
+    // 4. Indication de l'historique, si le poste est libre (pas de jungle sans Châtiment quand un
+    //    coéquipier en a un).
+    for (const p of mates) {
+      if (p.role) continue
+      const hint = hints.get(p.pid)
+      if (hint === 'jungle' && !p.smite && mates.some((m) => m.smite && m !== p)) continue
+      if (hint) take(p, hint)
+    }
+    // 5. Déduction.
+    const unknown = (): FactPlayer[] => mates.filter((p) => !p.role)
+    const missing = (): Role[] => ROLES.filter((r) => !taken.has(r))
+    if (missing().includes('support') && unknown().length >= 2) {
+      const sup = [...unknown()].sort((a, b) => a.cs + a.jcs - (b.cs + b.jcs))[0]
+      take(sup, 'support')
+    }
+    if (missing().length === 1 && unknown().length === 1) take(unknown()[0], missing()[0])
+  }
+}
+
+/** Convertit les données du client. Renvoie un motif si la partie ne peut pas être analysée. */
 export function normalizeGame(
   raw: RawPostGame,
-  resolveChamp?: ChampResolver
+  resolveChamp?: ChampResolver,
+  /** Poste du joueur local attribué en sélection des champions, s'il est connu. */
+  myRole?: Role | null
 ): GameFacts | { skip: string } {
   const g: any = (raw.game as any)?.info ?? raw.game
   if (!g || !Array.isArray(g.participants))
@@ -157,19 +236,11 @@ export function normalizeGame(
       controlWards: num(s.visionWardsBoughtInGame ?? s.detectorWardsPlaced)
     }
   })
-  // Poste de chaque joueur : poste de la partie, sinon voie et rôle (ancien format), sinon
-  // Châtiment → jungle ; un seul poste manquant dans une équipe se déduit des autres.
+  // Poste de chaque joueur : indication de l'historique pour l'instant ; recalculé plus bas avec
+  // les déplacements (chronologie) et le poste de l'API en jeu (journal).
   g.participants.forEach((p: any, i: number) => {
-    players[i].role = participantRole(p) ?? (players[i].smite ? 'jungle' : null)
+    players[i].role = participantRole(p)
   })
-  for (const team of [100, 200]) {
-    const mates = players.filter((p) => p.team === team)
-    const missing = ROLES.filter((r) => !mates.some((p) => p.role === r))
-    const unknown = mates.filter((p) => !p.role)
-    if (missing.length === 1 && unknown.length === 1) unknown[0].role = missing[0]
-  }
-  const mine = players.find((p) => p.pid === me)
-  if (!mine?.role) return { skip: tr('poste inconnu', 'unknown position') }
 
   const sm = g.participants.find((p: any) => num(p.participantId) === me)
   const st = sm?.stats ?? {}
@@ -197,7 +268,6 @@ export function normalizeGame(
     queueId: num(g.queueId),
     version: String(g.gameVersion ?? ''),
     me,
-    role: mine.role,
     perks,
     players,
     frames: [],
@@ -213,8 +283,19 @@ export function normalizeGame(
       ? tl.info.frames
       : []
   const teamOf = new Map(players.map((p) => [p.pid, p.team]))
+  const zones = new Map<number, Record<Zone, number>>()
   for (const f of frames) {
     const pf = f?.participantFrames ?? {}
+    const ts = num(f?.timestamp)
+    if (ts >= 110_000 && ts <= 610_000)
+      for (const p of players) {
+        const pos = pf[String(p.pid)]?.position
+        const z = pos ? zoneOf(num(pos.x), num(pos.y)) : null
+        if (!z) continue
+        const v = zones.get(p.pid) ?? { top: 0, mid: 0, bot: 0, jungle: 0 }
+        v[z]++
+        zones.set(p.pid, v)
+      }
     const row: number[][] = players.map((p) => {
       const x = pf[String(p.pid)] ?? {}
       return [
@@ -274,7 +355,13 @@ export function normalizeGame(
     }
   }
   if (facts.items.length) facts.itemSource = 'timeline'
-  if (raw.journal && resolveChamp) attachJournal(facts, raw.journal, resolveChamp)
+  const fixed = new Map<number, Role>()
+  if (raw.journal && resolveChamp) attachJournal(facts, raw.journal, resolveChamp, fixed)
+  if (myRole) fixed.set(me, myRole)
+  assignRoles(players, fixed, zones)
+  const mine = players.find((p) => p.pid === me)
+  if (!mine?.role) return { skip: tr('poste inconnu', 'unknown position') }
+  facts.role = mine.role
   return facts
 }
 
@@ -282,9 +369,14 @@ export function normalizeGame(
  * Rattache le journal enregistré pendant la partie (achats, balises, or en poche), si c'est bien
  * la même partie : mêmes champions dans les mêmes équipes, enregistrée depuis le début.
  */
-export function attachJournal(facts: GameFacts, j: GameJournal, resolve: ChampResolver): boolean {
+export function attachJournal(
+  facts: GameFacts,
+  j: GameJournal,
+  resolve: ChampResolver,
+  /** Reçoit le poste de chaque joueur selon l'API en jeu (pid → poste), si le journal en a. */
+  positions?: Map<number, Role>
+): boolean {
   if (!j || !Array.isArray(j.players) || !Array.isArray(j.items)) return false
-  if (j.from > 150 || j.lastTime < facts.duration * 0.8) return false
   if (facts.createdAt && Math.abs(j.startedAt - facts.createdAt) > 30 * 60 * 1000) return false
   const pidOf: number[] = []
   const used = new Set<number>()
@@ -299,6 +391,13 @@ export function attachJournal(facts: GameFacts, j: GameJournal, resolve: ChampRe
   }
   if (used.size < facts.players.length - 1) return false
   if (j.me >= 0 && pidOf[j.me] !== facts.me) return false
+  if (positions)
+    j.players.forEach((p, i) => {
+      const r = roleFromPosition(p.position)
+      if (r && pidOf[i] > 0) positions.set(pidOf[i], r)
+    })
+  // Achats : seulement si la partie a été suivie (presque) en entier.
+  if (j.from > 150 || j.lastTime < facts.duration * 0.8) return false
   const items = dropTransientSwaps(
     j.items
       .filter(([, idx]) => pidOf[idx] > 0)
@@ -840,6 +939,20 @@ export function cleanStoredItems(facts: GameFacts): GameFacts {
   const items = dropTransientSwaps(facts.items)
   if (journalMatchesFinalItems(items, facts)) return { ...facts, items }
   return { ...facts, items: [], itemSource: undefined, gold: undefined, controlWardsKnown: false }
+}
+
+/**
+ * Postes d'un bilan enregistré avant la correction des postes : l'historique du client a pu classer
+ * un joueur sans Châtiment en jungle. Recalculés avec les règles actuelles ; le poste enregistré est
+ * gardé s'il ne peut pas être déterminé.
+ */
+export function repairStoredRoles(facts: GameFacts): GameFacts {
+  if (!facts.role || !facts.players.some((p) => p.role !== undefined)) return facts
+  const players = facts.players.map((p) => ({ ...p }))
+  assignRoles(players)
+  const role = players.find((p) => p.pid === facts.me)?.role
+  if (!role) return facts
+  return { ...facts, players, role }
 }
 
 export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): GameReport {

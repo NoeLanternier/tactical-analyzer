@@ -1,12 +1,30 @@
-import { Ban, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
+import {
+  Ban,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
+  ThumbsDown,
+  ThumbsUp,
+  CircleHelp,
+  Minus
+} from 'lucide-react'
 import { useState, type ReactElement } from 'react'
 import type { TactiqueState } from '../hooks/useTactique'
-import type { BanAdvice, PickAdvice, PickFactor } from '../engine/draftAdvice'
+import {
+  pickVerdict,
+  type BanAdvice,
+  type PickAdvice,
+  type PickFactor,
+  type PickVerdict
+} from '../engine/draftAdvice'
+import { levelName } from '../engine/metaLevel'
+import { roleLabel } from '../engine/role'
 import { champIcon } from '../engine/gameData'
 import { Card, Chip } from './ui'
 import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
 
 const pct = (x: number): string => fmtPct(x, 1)
+const pts = (x: number): string => `${x >= 0 ? '+' : '−'}${fmtNumber(Math.abs(x) * 100, 1)}`
 
 function factorLabel(kind: PickFactor['kind'], enemyJungler: string | null): string {
   switch (kind) {
@@ -203,6 +221,153 @@ function Toggle({
       {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
       {label}
     </button>
+  )
+}
+
+const VERDICT: Record<
+  PickVerdict['level'],
+  { label: [string, string]; tone: string; Icon: typeof ThumbsUp }
+> = {
+  best: {
+    label: ['Recommandé', 'Recommended'],
+    tone: 'border-emerald-400/50 bg-emerald-500/10 text-emerald-300',
+    Icon: ThumbsUp
+  },
+  good: {
+    label: ['Bon choix', 'Good pick'],
+    tone: 'border-emerald-400/30 bg-emerald-500/5 text-emerald-200',
+    Icon: ThumbsUp
+  },
+  ok: {
+    label: ['Jouable', 'Playable'],
+    tone: 'border-slate-400/30 bg-white/5 text-slate-200',
+    Icon: Minus
+  },
+  bad: {
+    label: ['Déconseillé', 'Not recommended'],
+    tone: 'border-orange-400/50 bg-orange-500/10 text-orange-300',
+    Icon: ThumbsDown
+  },
+  unknown: {
+    label: ['Hors méta du poste', 'Off-meta for this role'],
+    tone: 'border-orange-400/40 bg-orange-500/5 text-orange-200',
+    Icon: CircleHelp
+  }
+}
+
+/**
+ * Champion survolé (pas encore verrouillé) : recommandé ou non dans cette draft, comparé aux
+ * autres choix possibles, avec l'effet des alliés et adversaires déjà choisis.
+ */
+export function PickVerdictCard({ t }: { t: TactiqueState }): ReactElement | null {
+  const { advice, gd, champ } = t
+  if (!advice || !gd || !champ) return null
+  const verdict = pickVerdict(advice, champ)
+  const { pick, best, better, level } = verdict
+  const v = gd.version
+  const ej = advice.enemyJungler?.label ?? null
+  const style =
+    verdict.total === 0
+      ? { ...VERDICT.unknown, label: ['Pas encore de données', 'No data yet'] as [string, string] }
+      : VERDICT[level]
+  const source = `${roleLabel(t.role)} · ${levelName(t.catalog.statsBracket)}`
+  return (
+    <section className={`rounded-lg border p-3 ${style.tone}`}>
+      <div className="flex items-center gap-3">
+        <img
+          src={champIcon(v, champ.id)}
+          alt={champ.label}
+          className="h-11 w-11 shrink-0 rounded-full border-2 border-white/20"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate font-cinzel text-base font-bold text-white">
+              {champ.label}
+            </span>
+            <span className="text-[9px] uppercase tracking-wide text-slate-400">
+              {tr('survolé', 'hovered')}
+            </span>
+          </div>
+          <div className="flex items-center gap-1 text-xs font-semibold">
+            <style.Icon size={13} /> {tr(...style.label)}
+          </div>
+        </div>
+        {pick && <WinRate p={pick} />}
+      </div>
+      <p className="mt-2 text-[11px] leading-snug text-slate-300">
+        {pick && best
+          ? level === 'best'
+            ? tr(
+                `${pick.rank}ᵉ sur ${verdict.total} dans cette draft${pick.rank > 1 ? ` (${pts(-verdict.gap)} pt vs ${best.champ.label})` : ''}.`,
+                `#${pick.rank} of ${verdict.total} in this draft${pick.rank > 1 ? ` (${pts(-verdict.gap)} pt vs ${best.champ.label})` : ''}.`
+              )
+            : tr(
+                `${pick.rank}ᵉ sur ${verdict.total} dans cette draft, ${pts(-verdict.gap)} pt par rapport au meilleur choix (${best.champ.label}).`,
+                `#${pick.rank} of ${verdict.total} in this draft, ${pts(-verdict.gap)} pt behind the best pick (${best.champ.label}).`
+              )
+          : verdict.total === 0
+            ? tr(
+                `Statistiques ${source} pas encore disponibles : avis impossible pour l’instant.`,
+                `${source} stats not available yet: no verdict for now.`
+              )
+            : tr(
+                `Pas ou trop peu de parties ${source} pour ce champion : rarement joué à ce poste.`,
+                `No or too few ${source} games for this champion: rarely played in this role.`
+              )}
+      </p>
+      {pick && (
+        <>
+          {pick.reasons.length > 0 && (
+            <p className="mt-1 text-[10px] leading-snug text-slate-400">
+              {pick.reasons.join(' · ')}
+            </p>
+          )}
+          <FactorChips factors={pick.factors} enemyJungler={ej} max={8} />
+          {pick.lowData && (
+            <p className="mt-1 text-[10px] text-slate-500">
+              {tr(
+                `Moins de 200 parties ce patch : estimation incertaine.`,
+                `Fewer than 200 games this patch: uncertain estimate.`
+              )}
+            </p>
+          )}
+        </>
+      )}
+      {better.length > 0 && level !== 'best' && (
+        <div className="mt-2 border-t border-white/10 pt-2">
+          <div className="mb-1 text-[9px] uppercase tracking-wider text-slate-500">
+            {tr('Mieux dans cette draft', 'Better in this draft')}
+          </div>
+          <ul className="flex flex-col gap-1">
+            {better.map((b) => (
+              <li key={b.champ.id} className="flex items-center gap-2">
+                <img src={champIcon(v, b.champ.id)} alt="" className="h-6 w-6 rounded" />
+                <span className="min-w-0 flex-1 truncate text-[11px] text-slate-100">
+                  {b.champ.label}
+                  {!b.inPool && (
+                    <span className="ml-1 text-[9px] text-gold">
+                      {tr('hors de tes champions', 'outside your pool')}
+                    </span>
+                  )}
+                </span>
+                {pick && (
+                  <span className="text-[10px] tabular-nums text-emerald-300">
+                    {pts(b.score - pick.score)} pt
+                  </span>
+                )}
+                <WinRate p={b} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <p className="mt-2 text-[9px] text-slate-500">
+        {tr(
+          `Stats ${source}. Runes et objets du champion affichés une fois verrouillé.`,
+          `${source} stats. The champion's runes and items show once locked in.`
+        )}
+      </p>
+    </section>
   )
 }
 

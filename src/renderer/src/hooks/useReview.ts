@@ -10,6 +10,7 @@ import {
   analyzeGame,
   FACTS_VERSION,
   normalizeGame,
+  repairStoredRoles,
   type GameFacts,
   type GameReport
 } from '../engine/postgame'
@@ -72,26 +73,33 @@ export function useReview(
   const busy = useRef(false)
   const autoRef = useRef(autoReview)
   const gdRef = useRef(gd)
+  // Poste de la partie en cours (attribué en sélection) : sert au bilan de fin de partie.
+  const roleRef = useRef(role)
 
   useEffect(() => {
     autoRef.current = autoReview
     gdRef.current = gd
-  }, [autoReview, gd])
+    roleRef.current = role
+  }, [autoReview, gd, role])
 
   // Bilans enregistrés.
   useEffect(() => {
-    void window.api.listReports().then((list) => setFacts(list.filter(isFacts)))
+    void window.api
+      .listReports()
+      .then((list) => setFacts(list.filter(isFacts).map(repairStoredRoles)))
   }, [])
 
-  const store = useCallback(async (raw: RawPostGame | null): Promise<string> => {
+  const store = useCallback(async (raw: RawPostGame | null, myRole?: Role): Promise<string> => {
     if (!raw)
       return tr(
         'partie introuvable dans l’historique du client',
         'game not found in the client history'
       )
     const data = gdRef.current
-    const f = normalizeGame(raw, (rawName, name) =>
-      data ? champFromLive(data, rawName, name)?.key : undefined
+    const f = normalizeGame(
+      raw,
+      (rawName, name) => (data ? champFromLive(data, rawName, name)?.key : undefined),
+      myRole
     )
     if ('skip' in f) return `${tr('partie ignorée', 'game skipped')}: ${f.skip}`
     const res = await window.api.saveReport(f.gameId, f)
@@ -108,10 +116,11 @@ export function useReview(
       if (busy.current) return
       busy.current = true
       setStatus({ state: 'waiting' })
+      const myRole = roleRef.current
       void window.api
         .waitForFinishedGame(since)
         .then(async (raw) => {
-          const error = await store(raw)
+          const error = await store(raw, myRole)
           if (error) setStatus({ state: 'info', message: error })
           else {
             setStatus({ state: 'idle' })
