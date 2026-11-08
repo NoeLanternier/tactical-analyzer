@@ -1,7 +1,10 @@
 import type { GameJournal, LiveGameData, LivePlayer, RawPostGame } from '../../../shared/types'
 import { getBuild, type Benchmark, type Catalog } from './catalog'
 import type { ChampInfo, GameData, ItemInfo } from './gameData'
-import { buildItemPlan } from './items'
+import { buildItemPlan, type ItemPlan } from './items'
+import { chooseVariant } from './variants'
+import { adaptChoices } from './choices'
+import { tw } from './tuning'
 import { ROLES, defaultStart, roleFromPosition, type Role } from './role'
 import { analyzeThreat } from './threat'
 import { fmtNumber, fmtPct, gold, tr } from '../../../shared/i18n'
@@ -1139,7 +1142,8 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
 
   // Conformité aux conseils de l'app, achat par achat (inventaires reconstitués).
   const purchases: PurchaseCheck[] = []
-  const baseBuild = champ ? getBuild(catalog, champ, jungle).build : null
+  const found = champ ? getBuild(catalog, champ, jungle) : null
+  const baseBuild = found?.build ?? null
   // Hors jungle, sans départ dans la méta : départ habituel du poste.
   const build =
     baseBuild && !jungle && !baseBuild.start?.length
@@ -1147,6 +1151,33 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
       : baseBuild
   const enemyKeys = foes.map((p) => p.champ)
   const allyKeys = allies.map((p) => p.champ)
+  const directFoe = enemyJ ? (gd.champions.get(enemyJ.champ) ?? null) : null
+  // Conseil de l'app à un instant de la partie, calculé comme en jeu : famille de build choisie
+  // selon la partie (puis suivie une fois commencée), choix adaptés aux adversaires, objets face
+  // aux adversaires.
+  const planAt = (live: LiveGameData, meLive: LivePlayer | null, gold: number): ItemPlan => {
+    const threat = analyzeThreat(gd, enemyKeys, allyKeys, live, champ!.id, catalog.profiles)
+    const variant = chooseVariant(gd, build!, threat, meLive, catalog.itemCounters, catalog.tuning)
+    const b = found?.generic
+      ? variant.build
+      : adaptChoices(
+          variant.build,
+          threat,
+          directFoe,
+          variant.chosen?.variant.runeChoices,
+          catalog.tuning
+        ).build
+    return buildItemPlan(
+      gd,
+      b,
+      threat,
+      meLive,
+      gold,
+      undefined,
+      catalog.itemCounters,
+      tw(catalog.tuning, 'counter')
+    )
+  }
   if (!hasItems && build && champ && legendaries.length > 0) {
     // Sans minutage : build final comparé au conseil calculé avec les objets de fin de partie de
     // tous les joueurs (votre inventaire sans vos objets légendaires).
@@ -1154,8 +1185,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
     const live = liveAt(gd, facts, t, true)
     const meLive = live.allPlayers.find((p) => p.riotId === live.activePlayer?.riotId) ?? null
     if (meLive) meLive.items = meLive.items.filter((i) => !gd.items.get(i.itemID)?.isLegendary)
-    const threat = analyzeThreat(gd, enemyKeys, allyKeys, live, champ.id, catalog.profiles)
-    const plan = buildItemPlan(gd, build, threat, meLive, 0)
+    const plan = planAt(live, meLive, 0)
     const pending = plan.steps.filter((s) => !s.owned && s.item.isLegendary).map((s) => s.item)
     const firstN = pending.slice(0, legendaries.length)
     const missing = firstN.filter((x) => !legendaries.some((l) => l.id === x.id))
@@ -1182,8 +1212,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
       const t = Math.max(0, b.t - 1)
       const live = liveAt(gd, facts, t)
       const meLive = live.allPlayers.find((p) => p.riotId === live.activePlayer?.riotId) ?? null
-      const threat = analyzeThreat(gd, enemyKeys, allyKeys, live, champ.id, catalog.profiles)
-      const plan = buildItemPlan(gd, build, threat, meLive, live.activePlayer?.currentGold ?? 0)
+      const plan = planAt(live, meLive, live.activePlayer?.currentGold ?? 0)
       const pending = plan.steps.filter((s) => !s.owned && s.item.isLegendary)
       const item = gd.items.get(b.id)!
       const same = (x: ItemInfo): boolean => x.id === item.id || x.name === item.name
