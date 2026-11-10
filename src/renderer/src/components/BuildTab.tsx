@@ -191,6 +191,51 @@ function MatchupCard({ t }: { t: TactiqueState }): ReactElement | null {
   )
 }
 
+/** Départs possibles hors jungle : celui conseillé et les autres, avec les stats des joueurs. */
+function StartNote({ t }: { t: TactiqueState }): ReactElement | null {
+  const sp = t.startPlan
+  const gd = t.gd
+  if (!sp || !gd) return null
+  const label = (items: string[]): string => {
+    const counts = new Map<string, number>()
+    for (const n of items) {
+      const l = gd.itemsByName.get(norm(n))?.label ?? n
+      counts.set(l, (counts.get(l) ?? 0) + 1)
+    }
+    return [...counts].map(([l, n]) => (n > 1 ? `${n} × ${l}` : l)).join(' + ')
+  }
+  const stat = (c: (typeof sp.others)[number]): string =>
+    c.share !== null
+      ? ` (${fmtPct(c.share)} ${tr('des parties', 'of games')}${c.winRate !== null ? `, ${fmtPct(c.winRate, 1)} ${tr('V', 'WR')}` : ''})`
+      : ''
+  const source =
+    sp.source === 'riot'
+      ? tr('proposé par la boutique du jeu', 'suggested by the in-game shop')
+      : sp.source === 'meta'
+        ? tr(
+            `le plus efficace ${levelName(t.build?.bracket)}`,
+            `most effective ${levelName(t.build?.bracket)}`
+          )
+        : tr('départ habituel du poste', 'usual start for the role')
+  return (
+    <div className="mb-2 rounded bg-white/5 px-2 py-1.5 text-[10px] leading-snug text-slate-400">
+      <div>
+        <span className="text-slate-200">
+          {tr('Départ', 'Start')} : {label(sp.chosen.items)}
+        </span>{' '}
+        · {source}
+        {stat(sp.chosen)}
+      </div>
+      {sp.others.length > 0 && (
+        <div className="mt-0.5">
+          {tr('Autres départs', 'Other starts')} :{' '}
+          {sp.others.map((c) => `${label(c.items)}${stat(c)}`).join(' · ')}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SyncBadge({ sync, okText }: { sync: SyncState; okText: string }): ReactElement | null {
   switch (sync.state) {
     case 'pending':
@@ -483,6 +528,7 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
             ) : undefined
           }
         >
+          {plan.steps.some((s) => s.kind === 'starter' && !s.owned) && <StartNote t={t} />}
           <ol className="flex flex-col gap-1.5">
             {plan.steps.map((s, i) => {
               const isNext = inGame && plan.next?.item.id === s.item.id && !s.owned

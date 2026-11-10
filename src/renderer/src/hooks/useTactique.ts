@@ -9,6 +9,7 @@ import {
   type LivePlayer,
   type ChampionPool,
   type RecommendedRunePage,
+  type RiotStartBundles,
   type Settings
 } from '../../../shared/types'
 import {
@@ -43,6 +44,7 @@ import { RIOT_COMPLIANT } from '../../../shared/edition'
 import { buildRunePage, type ResolvedRunePage } from '../engine/runes'
 import { chooseVariant, type VariantChoice } from '../engine/variants'
 import { tw } from '../engine/tuning'
+import { chooseStart, type StartPlan } from '../engine/start'
 import { analyzeThreat, findMe, type ThreatProfile } from '../engine/threat'
 import { META_PATCH, type JunglerBuild } from '../data/junglers'
 import { liveNudges, type Nudge } from '../engine/learning'
@@ -51,7 +53,6 @@ import { useReview, type ReviewState } from './useReview'
 import { useRemoteMeta } from './useRemoteMeta'
 import {
   clientPosition,
-  defaultStart,
   detectRole,
   readRole,
   roleLabel,
@@ -105,6 +106,8 @@ export interface TactiqueState {
   champ: ChampInfo | null
   build: JunglerBuild | null
   genericBuild: boolean
+  /** Départ conseillé et autres départs possibles (hors jungle). */
+  startPlan: StartPlan | null
   /** Famille de build choisie quand le champion en a plusieurs en Master+. */
   variant: VariantChoice | null
   /** Runes, bottes, familier ou compétences adaptés à la partie (et pourquoi). */
@@ -336,16 +339,43 @@ export function useTactique(): TactiqueState {
     return me ? (champFromLive(gd, me.rawChampionName, me.championName) ?? null) : null
   }, [gd, draft.localChampId, live])
 
-  const { baseBuild, genericBuild } = useMemo(() => {
-    if (!champ) return { baseBuild: null, genericBuild: false }
+  // Départs proposés par la boutique du jeu pour ce champion (édition personnelle ; hors jungle).
+  const champAlias = champ?.id ?? ''
+  const [riotStart, setRiotStart] = useState<{ alias: string; data: RiotStartBundles | null }>({
+    alias: '',
+    data: null
+  })
+  useEffect(() => {
+    if (!champAlias || jungle || RIOT_COMPLIANT || riotStart.alias === champAlias) return
+    let cancelled = false
+    void window.api
+      .getRiotStart(champAlias)
+      .catch(() => null)
+      .then((data) => {
+        if (!cancelled) setRiotStart({ alias: champAlias, data })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [champAlias, jungle, riotStart.alias])
+
+  const { baseBuild, genericBuild, startPlan } = useMemo(() => {
+    if (!champ || !gd) return { baseBuild: null, genericBuild: false, startPlan: null }
     const res = getBuild(catalog, champ, jungle)
-    // Hors jungle, sans départ dans la méta : départ habituel du poste (Doran…).
-    const build =
-      jungle || res.build.start?.length
-        ? res.build
-        : { ...res.build, start: defaultStart(res.build.archetype, role) }
-    return { baseBuild: build, genericBuild: res.generic }
-  }, [catalog, champ, jungle, role])
+    if (jungle) return { baseBuild: res.build, genericBuild: res.generic, startPlan: null }
+    // Hors jungle : départ de la boutique du jeu, sinon des joueurs du poste, sinon Doran…
+    const plan = chooseStart(
+      gd,
+      res.build,
+      role,
+      riotStart.alias === champ.id ? riotStart.data : null
+    )
+    return {
+      baseBuild: { ...res.build, start: plan.chosen.items },
+      genericBuild: res.generic,
+      startPlan: plan
+    }
+  }, [catalog, champ, gd, jungle, role, riotStart])
 
   // Pages de runes recommandées par Riot pour ce champion.
   const champKey = champ?.key ?? 0
@@ -646,6 +676,7 @@ export function useTactique(): TactiqueState {
     champ,
     build,
     genericBuild,
+    startPlan,
     variant,
     choiceNotes: adapted?.notes ?? [],
     matchup,

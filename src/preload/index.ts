@@ -20,6 +20,7 @@ const api: TactiqueApi = {
   applyItemSet: (payload) => ipcRenderer.invoke('apply-item-set', payload),
   getRecommendedRunes: (championId, position) =>
     ipcRenderer.invoke('get-recommended-runes', championId, position),
+  getRiotStart: (alias) => ipcRenderer.invoke('get-riot-start', alias),
   getChampionPool: () => ipcRenderer.invoke('get-champion-pool'),
   getRankedTier: () => ipcRenderer.invoke('get-ranked-tier'),
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),

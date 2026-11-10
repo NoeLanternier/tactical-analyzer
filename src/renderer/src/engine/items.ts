@@ -469,6 +469,19 @@ export function buildItemPlan(
       owned: false,
       reason: tr('familier de jungle', 'jungle pet')
     })
+  // Hors jungle : départ (anneau de Doran, larme…), avec ses potions.
+  if (!pet && starter.length) {
+    const main = starter.find((i) => !i.tags.includes('Consumable')) ?? starter[0]
+    const extras = new Map<string, number>()
+    for (const i of starter) if (i !== main) extras.set(i.label, (extras.get(i.label) ?? 0) + 1)
+    const extra = [...extras].map(([label, n]) => (n > 1 ? `${n} × ${label}` : label)).join(', ')
+    steps.push({
+      item: main,
+      kind: 'starter',
+      owned: false,
+      reason: extra ? `+ ${extra}` : undefined
+    })
+  }
   if (coreSteps[0]) steps.push(coreSteps[0])
   if (ownedBoots) steps.push({ item: ownedBoots, kind: 'boots', owned: true })
   else if (boots.item)
@@ -597,6 +610,12 @@ export function buildItemPlan(
   for (const s of steps) if (ownsId(s.item.id) || ownedNames.has(norm(s.item.name))) s.owned = true
   // Familier vendu en fin de partie (ou jamais acheté) : inutile de le proposer une fois le build lancé.
   for (const s of steps) if (s.kind === 'starter' && ownedLegendaries.length > 0) s.owned = true
+  // Départ hors jungle : acquis dès qu'un objet durable est en inventaire (partie commencée).
+  const started = ownedItems.some(
+    (i) =>
+      !i.tags.includes('Consumable') && !i.tags.includes('Trinket') && !i.tags.includes('Jungle')
+  )
+  for (const s of steps) if (s.kind === 'starter' && !pet && started) s.owned = true
   // Le composant anti-soins est considéré acquis si un objet à Blessures graves est possédé.
   for (const s of steps)
     if (s.kind === 'antiheal' && ownedItems.some((i) => i.grievous || i.from.includes(s.item.id)))

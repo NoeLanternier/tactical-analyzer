@@ -251,6 +251,9 @@ export interface GameJournal {
   gold: [number, number][]
 }
 
+/** Départs de la boutique du jeu : par poste (null : tous), listes d'identifiants d'objets. */
+export type RiotStartBundles = { position: string | null; bundles: number[][] }[]
+
 export interface RawPostGame {
   gameId: number
   game: unknown
@@ -278,6 +281,8 @@ export interface TactiqueApi {
   applyRunes: (payload: RunePagePayload) => Promise<ActionResult>
   applyItemSet: (payload: ItemSetPayload) => Promise<ActionResult>
   getRecommendedRunes: (championId: number, position: string) => Promise<RecommendedRunePage[]>
+  /** Départs proposés par la boutique du jeu pour ce champion (édition personnelle, sinon null). */
+  getRiotStart: (alias: string) => Promise<RiotStartBundles | null>
   getChampionPool: () => Promise<ChampionPool>
   /** Rang classé solo du joueur ('GOLD', 'UNRANKED'…), null si inconnu. */
   getRankedTier: () => Promise<string | null>

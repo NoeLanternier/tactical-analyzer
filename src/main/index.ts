@@ -17,6 +17,7 @@ import * as fs from 'fs'
 import { JournalRecorder } from './journal'
 import { langFromLocale, setLang, tr, type Lang } from '../shared/i18n'
 import { loadMetaCache, saveMetaCache } from './metaCache'
+import { getRiotStart } from './riotStart'
 import {
   metaFallbackUrl,
   type ItemSetPayload,
@@ -133,6 +134,7 @@ function registerIpc(): void {
   ipcMain.handle('get-recommended-runes', (_e, championId: number, position: string) =>
     lcu.getRecommendedRunes(championId, position)
   )
+  ipcMain.handle('get-riot-start', (_e, alias: string) => getRiotStart(String(alias)))
 
   ipcMain.handle('get-champion-pool', () => lcu.getChampionPool())
   ipcMain.handle('get-ranked-tier', () => lcu.getRankedTier())

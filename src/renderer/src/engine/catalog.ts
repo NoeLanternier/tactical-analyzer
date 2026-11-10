@@ -190,6 +190,7 @@ export function mergeOverride(
           Array.isArray(b.start) && b.start.every((x: unknown) => typeof x === 'string')
             ? b.start
             : undefined,
+        startOptions: parseStartOptions(b.startOptions),
         bracket,
         situational: parseSituational(b.situational),
         variants: parseVariants(b.variants),
@@ -237,6 +238,22 @@ function mergeStats(
     if (!b || o.games >= 200 || o.games >= b.games) out[id] = o
   }
   return out
+}
+
+function parseStartOptions(raw: any): JunglerBuild['startOptions'] {
+  if (!Array.isArray(raw)) return undefined
+  const out = raw
+    .filter(
+      (o: any) =>
+        Array.isArray(o?.items) &&
+        o.items.length > 0 &&
+        o.items.every((x: unknown) => typeof x === 'string') &&
+        typeof o.games === 'number' &&
+        typeof o.share === 'number' &&
+        typeof o.winRate === 'number'
+    )
+    .map((o: any) => ({ items: o.items, games: o.games, share: o.share, winRate: o.winRate }))
+  return out.length ? out : undefined
 }
 
 const num = (x: any): number | null => (typeof x === 'number' && Number.isFinite(x) ? x : null)

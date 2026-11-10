@@ -26,6 +26,14 @@ export interface RuneSpec {
 
 export type Pet = 'Gustwalker Hatchling' | 'Mosstomper Seedling' | 'Scorchclaw Pup'
 
+/** Départ : objets achetés avant 1 min 30 (anneau de Doran + 2 potions…). */
+export interface StartOption {
+  items: string[]
+  games: number
+  share: number
+  winRate: number
+}
+
 export interface JunglerBuild {
   /** Identifiant Data Dragon. */
   id: string
@@ -35,6 +43,8 @@ export interface JunglerBuild {
   boots: string
   /** Objets de départ (méta distante ; absent : familier + potion en jungle, Doran… sinon). */
   start?: string[]
+  /** Départs courants à ce poste (au moins 8 % des parties), avec leur part et leur taux. */
+  startOptions?: StartOption[]
   /** Trois premiers objets légendaires, dans l'ordre d'achat. */
   core: [string, string, string]
   /** Objets 4 à 6 les plus joués, par ordre de popularité. */
