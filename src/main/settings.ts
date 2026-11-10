@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
-import { DEFAULT_META_URL, DEFAULT_SETTINGS, type Settings } from '../shared/types'
+import { DEFAULT_META_URL, DEFAULT_SETTINGS, LEGACY_META_URL, type Settings } from '../shared/types'
 
 function settingsFile(): string {
   return path.join(app.getPath('userData'), 'settings.json')
@@ -37,7 +37,11 @@ function sanitize(raw: Record<string, unknown>): Settings {
     s.runeSource = raw.runeSource
   if (raw.side === 'left' || raw.side === 'right') s.side = raw.side
   // Vide (anciennes installations, ou champ effacé) : méta officielle.
-  if (typeof raw.metaUrl === 'string') s.metaUrl = raw.metaUrl.trim() || DEFAULT_META_URL
+  // Ancienne adresse officielle (branche main) : nouvelle adresse (branche meta).
+  if (typeof raw.metaUrl === 'string') {
+    const url = raw.metaUrl.trim()
+    s.metaUrl = !url || url === LEGACY_META_URL ? DEFAULT_META_URL : url
+  }
   if (raw.metaLevel === 'auto' || raw.metaLevel === 'master' || raw.metaLevel === 'gold')
     s.metaLevel = raw.metaLevel
   if (

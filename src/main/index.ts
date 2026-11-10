@@ -17,7 +17,13 @@ import * as fs from 'fs'
 import { JournalRecorder } from './journal'
 import { langFromLocale, setLang, tr, type Lang } from '../shared/i18n'
 import { loadMetaCache, saveMetaCache } from './metaCache'
-import type { ItemSetPayload, RawPostGame, RunePagePayload, Settings } from '../shared/types'
+import {
+  metaFallbackUrl,
+  type ItemSetPayload,
+  type RawPostGame,
+  type RunePagePayload,
+  type Settings
+} from '../shared/types'
 
 // Plus de "ignore-certificate-errors" : l'API en jeu est vérifiée avec le certificat Riot (live.ts).
 
@@ -157,22 +163,34 @@ function registerIpc(): void {
   ipcMain.handle('fetch-meta-override', async (_e, url: string) => {
     if (!/^https:\/\//i.test(url))
       return { ok: false, error: tr('URL https:// requise', 'https:// URL required') }
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 8000)
-    try {
-      const res = await net.fetch(url, { signal: controller.signal })
-      if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
-      const data = await res.json()
-      saveMetaCache(url, data)
-      return { ok: true, data }
-    } catch (error) {
-      return { ok: false, error: String((error as Error)?.message ?? error) }
-    } finally {
-      clearTimeout(timeout)
+    const get = async (from: string): Promise<{ ok: boolean; data?: unknown; error?: string }> => {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 8000)
+      try {
+        const res = await net.fetch(from, { signal: controller.signal })
+        if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
+        return { ok: true, data: await res.json() }
+      } catch (error) {
+        return { ok: false, error: String((error as Error)?.message ?? error) }
+      } finally {
+        clearTimeout(timeout)
+      }
     }
+    // Méta officielle : branche meta, sinon la copie quotidienne de la branche main.
+    let res = await get(url)
+    const fallback = metaFallbackUrl(url)
+    if (!res.ok && fallback) {
+      const second = await get(fallback)
+      if (second.ok) res = second
+    }
+    if (res.ok) saveMetaCache(url, res.data)
+    return res
   })
 
-  ipcMain.handle('get-cached-meta', (_e, url: string) => loadMetaCache(String(url)))
+  ipcMain.handle('get-cached-meta', (_e, url: string) => {
+    const fallback = metaFallbackUrl(String(url))
+    return loadMetaCache(String(url)) ?? (fallback ? loadMetaCache(fallback) : null)
+  })
 
   // Après-partie.
   // Le journal enregistré pendant la partie est joint : le renderer le rattache si les champions

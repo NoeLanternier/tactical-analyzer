@@ -189,9 +189,21 @@ export interface Settings {
   language: LanguageSetting
 }
 
-/** Méta officielle, recalculée chaque nuit à partir des parties Master+ (dépôt tactique-meta). */
+/**
+ * Méta officielle, recalculée toutes les 6 heures (dépôt tactique-meta). Branche « meta » réécrite
+ * à chaque publication : l'historique du dépôt ne grossit pas.
+ */
 export const DEFAULT_META_URL =
+  'https://raw.githubusercontent.com/NoeLanternier/tactique-meta/meta/meta.json'
+/** Ancienne adresse (branche main, mise à jour une fois par jour) : secours et migration. */
+export const LEGACY_META_URL =
   'https://raw.githubusercontent.com/NoeLanternier/tactique-meta/main/meta.json'
+
+/** Même fichier sur la branche main (secours si la branche meta est inaccessible), sinon null. */
+export function metaFallbackUrl(url: string): string | null {
+  const prefix = 'https://raw.githubusercontent.com/NoeLanternier/tactique-meta/'
+  return url.startsWith(`${prefix}meta/`) ? `${prefix}main/${url.slice(prefix.length + 5)}` : null
+}
 
 export const DEFAULT_SETTINGS: Settings = {
   autoRunes: true,
