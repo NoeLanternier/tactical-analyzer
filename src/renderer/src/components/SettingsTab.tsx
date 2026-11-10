@@ -58,7 +58,8 @@ function EngineCard({ t }: { t: TactiqueState }): ReactElement | null {
             )}
           </p>
           <ul className="grid grid-cols-2 gap-x-2">
-            {TUNING_KEYS.map((k) => {
+            {/* Force du champion : lissée selon le nombre de parties dans l'app (draftAdvice). */}
+            {TUNING_KEYS.filter((k) => k !== 'pick').map((k) => {
               const w = tuning.weights[k]
               const color =
                 w < 0.8 ? 'text-orange-300' : w > 1.2 ? 'text-emerald-300' : 'text-slate-300'

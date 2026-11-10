@@ -7,7 +7,7 @@ import type { SituationContext } from '../data/junglers'
 import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
 import { tw } from './tuning'
 
-// Conseils de pick et de ban pour la jungle, à partir des statistiques Master+ du patch :
+// Conseils de pick et de ban pour le poste joué, à partir des statistiques du patch :
 // - taux de victoire de chaque jungler ;
 // - affrontement avec le jungler adverse, s'il est connu ;
 // - taux de victoire avec chaque allié et contre chaque adversaire déjà choisis (la draft est
@@ -17,7 +17,17 @@ import { tw } from './tuning'
 
 /** Effet d'un critère sur le taux de victoire estimé d'un pick, en points (0,01 = 1 point). */
 export interface PickFactor {
-  kind: 'meta' | 'vs' | 'allies' | 'enemies' | 'comp' | 'blind' | 'team' | 'mastery' | 'personal'
+  kind:
+    | 'meta'
+    | 'vs'
+    | 'allies'
+    | 'enemies'
+    | 'comp'
+    | 'blind'
+    | 'team'
+    | 'mastery'
+    | 'personal'
+    | 'data'
   points: number
 }
 
@@ -76,8 +86,28 @@ const clamp = (x: number, lo: number, hi: number): number => Math.max(lo, Math.m
 const pct = (x: number): string => fmtPct(x, 1)
 const pts = (x: number): string => `${x > 0 ? '+' : '−'}${fmtNumber(Math.abs(x) * 100, 1)}`
 
+/**
+ * Lissage du taux de victoire d'un champion à ce poste (bayésien empirique) : les écarts réels entre
+ * champions sont petits (≈ 1,5 point d'écart-type) face au hasard de quelques dizaines de parties.
+ * Le nombre de parties « a priori » est mesuré sur la méta (méthode des moments), borné ici.
+ */
+export function shrinkPrior(stats: Record<string, JunglerStat>): { mean: number; k: number } {
+  const rows = Object.values(stats).filter((s) => s.games >= 100)
+  const total = rows.reduce((t, s) => t + s.games, 0)
+  if (rows.length < 10 || total === 0) return { mean: 0.5, k: 600 }
+  const mean = rows.reduce((t, s) => t + s.games * s.winRate, 0) / total
+  const observed = rows.reduce((t, s) => t + s.games * (s.winRate - mean) ** 2, 0) / total
+  const noise = (rows.length * mean * (1 - mean)) / total
+  const between = Math.max(observed - noise, 0.0001)
+  return { mean, k: clamp((mean * (1 - mean)) / between, 200, 2500) }
+}
+
 /** Lissage des paires (allié / adversaire) : il faut beaucoup de parties pour s'écarter du global. */
 const PAIR_K = 40
+/** En dessous : estimation peu fiable, pick moins sûr. */
+const LOW_DATA_GAMES = 200
+/** Effet maximal de la composition adverse (toute l'équipe connue), en points. */
+const COMP_CAP = 0.025
 /** Effet cumulé maximal des alliés et adversaires, en log-odds (≈ ±6 points). */
 const PAIR_CAP = 0.25
 /** Part des parties où l'adversaire choisit un contre quand on se dévoile tôt. */
@@ -136,8 +166,10 @@ export function computeDraftAdvice(
   const masteryOf = new Map((pool?.mastery ?? []).map((m) => [m.championId, m.points]))
   const totalGames = Object.values(stats).reduce((s, j) => s + j.games, 0) || 1
 
-  // Junglers connus : statistiques du patch, sinon base de builds.
-  const jungleIds = new Set([...Object.keys(stats), ...catalog.builds.keys()])
+  // Champions du poste : statistiques du patch (un champion sans statistiques à ce poste n'est pas
+  // classé), sinon base de builds (méta absente).
+  const statIds = Object.keys(stats)
+  const jungleIds = new Set(statIds.length >= 20 ? statIds : [...statIds, ...catalog.builds.keys()])
   const junglers = [...jungleIds]
     .map((id) => gd.championsById.get(id))
     .filter((c): c is ChampInfo => !!c)
@@ -165,7 +197,8 @@ export function computeDraftAdvice(
   // Effet « général » d'un allié ou d'un adversaire, commun à tous les junglers (un champion fort
   // fait gagner son équipe quel que soit le jungler) : il est retiré pour ne garder que l'effet
   // propre à chaque jungler (synergie, affrontement).
-  const baseOf = (j: JunglerStat): number => bayes(j.games, j.winRate, 0.5, 60)
+  const prior = shrinkPrior(stats)
+  const baseOf = (j: JunglerStat): number => bayes(j.games, j.winRate, prior.mean, prior.k)
   const generalEffect = (champ: ChampInfo, side: 'with' | 'against'): number => {
     let weight = 0
     let sum = 0
@@ -193,10 +226,27 @@ export function computeDraftAdvice(
 
   // Composition adverse visible (profils mesurés) : poids des contextes « équipe très AP, très AD,
   // soins, résistante, contrôles » pour le taux de victoire de chaque jungler dans ces contextes.
+  const knownEnemies = otherEnemies.length + (enemyJungler ? 1 : 0)
   const ctxWeights =
-    otherEnemies.length + (enemyJungler ? 1 : 0) >= 2
+    knownEnemies >= 2
       ? contextWeights(analyzeThreat(gd, draft.enemyIds, [], null, null, catalog.profiles))
       : {}
+  // Écart moyen de tous les champions dans chaque contexte : certains contextes sont liés à l'issue
+  // de la partie (une équipe adverse qui soigne beaucoup est souvent une équipe qui gagne), et tous
+  // les champions y ont un taux bas. Seul l'écart propre au champion compte.
+  const ctxMean: Partial<Record<SituationContext, number>> = {}
+  for (const ctx of Object.keys(ctxWeights) as SituationContext[]) {
+    let w = 0
+    let sum = 0
+    for (const j of Object.values(stats)) {
+      const cell = j.contexts?.[ctx]
+      if (!cell) continue
+      const base = baseOf(j)
+      w += cell[0]
+      sum += cell[0] * (bayes(cell[0], cell[1], base, 100) - base)
+    }
+    ctxMean[ctx] = w > 0 ? sum / w : 0
+  }
   const compShift = (s: JunglerStat, base: number): { shift: number; best: string | null } => {
     let sum = 0
     let weightSum = 0
@@ -204,26 +254,64 @@ export function computeDraftAdvice(
     for (const [ctx, w] of Object.entries(ctxWeights) as [SituationContext, number][]) {
       const cell = s.contexts?.[ctx]
       if (!cell || w <= 0) continue
-      const rate = bayes(cell[0], cell[1], base, 60)
-      sum += w * (rate - base)
+      const own = bayes(cell[0], cell[1], base, 100) - base - (ctxMean[ctx] ?? 0)
+      sum += w * own
       weightSum += w
       const label = CONTEXT_LABEL[ctx]
-      if (label && Math.abs(w * (rate - base)) > (best ? Math.abs(best.value) : 0.008))
-        best = {
-          label: `${tr(label[0], label[1])} ${pct(cell[1])}`,
-          value: w * (rate - base)
-        }
+      if (label && Math.abs(w * own) > (best ? Math.abs(best.value) : 0.008))
+        best = { label: `${tr(label[0], label[1])} (${pts(own)} pts)`, value: w * own }
     }
-    return { shift: clamp(sum / Math.max(1, weightSum), -0.04, 0.04), best: best?.label ?? null }
+    // Équipe adverse incomplète : effet proportionnel aux adversaires connus.
+    const shift = (sum / Math.max(1, weightSum)) * Math.min(1, knownEnemies / 5)
+    return { shift: clamp(shift, -COMP_CAP, COMP_CAP), best: best?.label ?? null }
   }
+
+  // Risque d'être contré quand l'adversaire direct n'est pas encore choisi : perte moyenne face à
+  // ses trois pires affrontements connus, et part des adversaires possibles dont l'affrontement est
+  // connu. Un champion peu joué n'a presque aucun affrontement mesuré : il prend le risque moyen du
+  // poste plutôt qu'aucun risque.
+  const blindOf = (
+    c: ChampInfo,
+    s: JunglerStat | undefined,
+    base: number
+  ): { loss: number; coverage: number; counters: ChampInfo[] } => {
+    if (!openEnemyJunglers.length) return { loss: 0, coverage: 1, counters: [] }
+    const known = s
+      ? openEnemyJunglers
+          .filter((e) => e.id !== c.id && (s.vs[e.id]?.[0] ?? 0) >= 15)
+          .map((e) => ({ e, wr: bayes(s.vs[e.id][0], s.vs[e.id][1], base, 25) }))
+      : []
+    const coverage =
+      known.reduce((t, x) => t + (stats[x.e.id]?.games ?? 0), 0) /
+      Math.max(
+        1,
+        openEnemyJunglers.reduce((t, e) => t + (stats[e.id]?.games ?? 0), 0)
+      )
+    const counters = known.filter((x) => x.wr <= base - 0.02).sort((a, b) => a.wr - b.wr)
+    const worst = counters.slice(0, 3)
+    const loss = worst.length ? base - worst.reduce((t, x) => t + x.wr, 0) / worst.length : 0
+    return { loss, coverage, counters: counters.map((x) => x.e) }
+  }
+  const covered = openEnemyJunglers.length
+    ? junglers
+        .map((c) => {
+          const s = stats[c.id]
+          return s && s.games >= 300 ? blindOf(c, s, baseOf(s)) : null
+        })
+        .filter((x): x is NonNullable<typeof x> => !!x && x.coverage >= 0.6)
+    : []
+  const meanBlindLoss = covered.length
+    ? covered.reduce((t, x) => t + x.loss, 0) / covered.length
+    : 0
 
   const scorePick = (c: ChampInfo): PickAdvice => {
     const s: JunglerStat | undefined = stats[c.id]
     const reasons: string[] = []
     const factors: PickFactor[] = []
-    const base = s ? bayes(s.games, s.winRate, 0.5, 60) : 0.5
-    // Poids des critères réglés par le pipeline de méta (1 sans réglage).
-    let z = tw(catalog.tuning, 'pick') * logit(base)
+    const base = s ? baseOf(s) : prior.mean
+    // Force du champion : déjà ramenée vers la moyenne selon le nombre de parties (lissage
+    // bayésien empirique), d'où pas de coefficient du pipeline ici (mesuré avec un lissage faible).
+    let z = logit(base)
     // Chaque critère est noté par son effet en points de taux de victoire.
     let last = sigmoid(z)
     const factor = (kind: PickFactor['kind']): void => {
@@ -231,7 +319,9 @@ export function computeDraftAdvice(
       if (Math.abs(now - last) >= 0.002) factors.push({ kind, points: now - last })
       last = now
     }
-    if (Math.abs(last - 0.5) >= 0.002) factors.push({ kind: 'meta', points: last - 0.5 })
+    if (Math.abs(last - prior.mean) >= 0.002)
+      factors.push({ kind: 'meta', points: last - prior.mean })
+    last = sigmoid(z)
     reasons.push(
       s
         ? tr(
@@ -311,33 +401,28 @@ export function computeDraftAdvice(
         factor('comp')
         if (comp.best && Math.abs(comp.shift) >= 0.006) reasons.push(comp.best)
       }
+    }
 
-      // Jungler adverse pas encore choisi : risque qu'il prenne un contre.
-      if (openEnemyJunglers.length) {
-        const known = openEnemyJunglers
-          .filter((e) => e.id !== c.id && (s.vs[e.id]?.[0] ?? 0) >= 15)
-          .map((e) => ({ e, wr: bayes(s.vs[e.id][0], s.vs[e.id][1], base, 25) }))
-        const coverage =
-          known.reduce((t, x) => t + (stats[x.e.id]?.games ?? 0), 0) /
-          openEnemyJunglers.reduce((t, e) => t + (stats[e.id]?.games ?? 0), 0)
-        const counters = known.filter((x) => x.wr <= base - 0.02).sort((a, b) => a.wr - b.wr)
-        if (counters.length) {
-          const worst = counters.slice(0, 3)
-          const loss = base - worst.reduce((t, x) => t + x.wr, 0) / worst.length
-          z = logit(clamp(sigmoid(z) - COUNTER_PICK_RATE * loss, 0.05, 0.95))
-          factor('blind')
-          if (loss >= 0.03) {
-            blind = 'risky'
-            const names = counters
-              .slice(0, 2)
-              .map((x) => x.e.label)
-              .join(', ')
-            reasons.push(tr(`contré par ${names}`, `countered by ${names}`))
-          }
-        } else if (coverage >= 0.6) {
-          blind = 'safe'
-          reasons.push(tr('peu de contres', 'few counters'))
-        }
+    // Adversaire direct pas encore choisi : risque qu'il prenne un contre (risque moyen du poste
+    // pour la part des affrontements inconnus).
+    if (openEnemyJunglers.length) {
+      const risk = blindOf(c, s, base)
+      const cov = Math.min(1, risk.coverage / 0.6)
+      const loss = cov * risk.loss + (1 - cov) * meanBlindLoss
+      if (loss > 0) {
+        z = logit(clamp(sigmoid(z) - COUNTER_PICK_RATE * loss, 0.05, 0.95))
+        factor('blind')
+      }
+      if (risk.counters.length && risk.loss >= 0.03) {
+        blind = 'risky'
+        const names = risk.counters
+          .slice(0, 2)
+          .map((x) => x.label)
+          .join(', ')
+        reasons.push(tr(`contré par ${names}`, `countered by ${names}`))
+      } else if (risk.coverage >= 0.6 && risk.loss < 0.015) {
+        blind = 'safe'
+        reasons.push(tr('peu de contres', 'few counters'))
       }
     }
 
@@ -389,18 +474,22 @@ export function computeDraftAdvice(
         )
       )
     const winRate = sigmoid(z)
+    // Peu de parties à ce poste : pick moins sûr (jusqu'à −1 point sous 200 parties).
+    const games = s?.games ?? 0
+    const unsure = games < LOW_DATA_GAMES ? -0.01 * (1 - games / LOW_DATA_GAMES) : 0
+    if (unsure <= -0.002) factors.push({ kind: 'data', points: unsure })
     if (Math.abs(fit) >= 0.002) factors.push({ kind: 'team', points: fit })
     if (comfort >= 0.002) factors.push({ kind: 'mastery', points: comfort })
     if (Math.abs(mine) >= 0.002) factors.push({ kind: 'personal', points: mine })
     return {
       champ: c,
       winRate,
-      score: winRate + fit + comfort + mine,
+      score: winRate + fit + comfort + mine + unsure,
       reasons,
       factors,
       inPool: poolIds.has(c.key),
       blind,
-      lowData: (s?.games ?? 0) < 200,
+      lowData: games < LOW_DATA_GAMES,
       games: s?.games ?? 0,
       pickRate: s ? s.games / totalGames : 0,
       rank: 0
@@ -549,7 +638,8 @@ export const VERDICT_GAPS = { best: 0.005, good: 0.015, ok: 0.03 }
 
 export function pickVerdict(advice: DraftAdvice, champ: ChampInfo): PickVerdict {
   const pick = advice.ranking.find((x) => x.champ.key === champ.key) ?? null
-  const best = advice.ranking[0] ?? null
+  // Référence : le meilleur choix assez joué (un champion à 40 parties peut être en tête par hasard).
+  const best = advice.ranking.find((x) => !x.lowData) ?? advice.ranking[0] ?? null
   const total = advice.ranking.length
   if (!pick || !best) {
     const better = advice.picks.slice(0, 3)
@@ -557,7 +647,7 @@ export function pickVerdict(advice: DraftAdvice, champ: ChampInfo): PickVerdict 
   }
   const gap = Math.max(0, best.score - pick.score)
   const level: PickVerdict['level'] =
-    pick.rank <= 3 || gap <= VERDICT_GAPS.best
+    gap <= VERDICT_GAPS.best
       ? 'best'
       : gap <= VERDICT_GAPS.good
         ? 'good'

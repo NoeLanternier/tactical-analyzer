@@ -466,16 +466,17 @@ export function useTactique(): TactiqueState {
 
   // Résultats du joueur par champion (bilans), pour les conseils de pick.
   const personalRecord = useMemo(() => {
+    // Tes résultats au poste joué seulement (Mordekaiser top ne dit rien de Mordekaiser milieu).
     const m: PersonalRecord = new Map()
     for (const r of review.reports) {
-      if (!r.champ) continue
+      if (!r.champ || (r.role ?? 'jungle') !== role) continue
       const rec = m.get(r.champ.id) ?? { games: 0, wins: 0 }
       rec.games++
       if (r.win) rec.wins++
       m.set(r.champ.id, rec)
     }
     return m
-  }, [review.reports])
+  }, [review.reports, role])
 
   const advice = useMemo(
     () =>

@@ -206,7 +206,7 @@ export function mergeOverride(
       builds,
       origin: accepted > 0 ? 'distante' : base.origin,
       profiles: parseProfiles(raw?.profiles) ?? base.profiles,
-      junglerStats: parseJunglerStats(raw?.junglers) ?? base.junglerStats,
+      junglerStats: mergeStats(base.junglerStats, parseJunglerStats(raw?.junglers)),
       benchmarks: parseBenchmarks(raw?.benchmarks) ?? base.benchmarks,
       statsBracket: parseJunglerStats(raw?.junglers) ? bracket : base.statsBracket,
       itemCounters: parseItemCounters(raw?.itemCounters) ?? base.itemCounters,
@@ -218,6 +218,25 @@ export function mergeOverride(
     generatedAt,
     sampleGames
   }
+}
+
+/**
+ * Statistiques de draft superposées (ex. Or à Émeraude sur Master+) : par champion, celles du
+ * niveau superposé s'il a assez de parties (200, ou autant que la base), sinon celles de la base.
+ * Un champion absent du niveau superposé garde ainsi ses statistiques de base.
+ */
+function mergeStats(
+  base: Record<string, JunglerStat> | undefined,
+  over: Record<string, JunglerStat> | undefined
+): Record<string, JunglerStat> | undefined {
+  if (!over) return base
+  if (!base) return over
+  const out: Record<string, JunglerStat> = { ...base }
+  for (const [id, o] of Object.entries(over)) {
+    const b = base[id]
+    if (!b || o.games >= 200 || o.games >= b.games) out[id] = o
+  }
+  return out
 }
 
 const num = (x: any): number | null => (typeof x === 'number' && Number.isFinite(x) ? x : null)

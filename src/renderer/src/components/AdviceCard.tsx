@@ -46,6 +46,8 @@ function factorLabel(kind: PickFactor['kind'], enemyJungler: string | null): str
       return tr('maîtrise', 'mastery')
     case 'personal':
       return tr('tes parties', 'your games')
+    case 'data':
+      return tr('peu de données', 'little data')
   }
 }
 
