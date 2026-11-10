@@ -624,13 +624,17 @@ export function buildItemPlan(
     // Inventaire plein (6 emplacements hors balise) et aucun composant à compléter : il faut vendre.
     const slotsUsed = (me.items ?? []).filter((it) => it.slot < 6).length
     if (slotsUsed >= 6 && remaining === pending.item.total) {
-      const sellable = ownedItems
-        .filter((i) => !i.isLegendary && !i.isBoots)
-        .sort((a, b) => {
-          const petA = a.tags.includes('Jungle') ? 0 : 1
-          const petB = b.tags.includes('Jungle') ? 0 : 1
-          return petA - petB || a.total - b.total
-        })[0]
+      // Objets des 6 emplacements seulement (la balise a son propre emplacement et ne se vend pas
+      // pour faire de la place) : familier, puis composants les moins chers, consommables en dernier.
+      const rank = (i: ItemInfo): number =>
+        i.tags.includes('Jungle') ? 0 : i.tags.includes('Consumable') ? 2 : 1
+      const sellable = (me.items ?? [])
+        .filter((it) => it.slot < 6)
+        .map((it) => gd.items.get(it.itemID))
+        .filter(
+          (i): i is ItemInfo => !!i && !i.isLegendary && !i.isBoots && !i.tags.includes('Trinket')
+        )
+        .sort((a, b) => rank(a) - rank(b) || a.total - b.total)[0]
       next.sellHint = sellable
         ? tr(`Inventaire plein : vends ${sellable.label}`, `Inventory full: sell ${sellable.label}`)
         : tr(
