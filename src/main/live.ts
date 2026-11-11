@@ -104,7 +104,16 @@ function normalize(raw: any): LiveGameData | null {
             ),
             summonerName: String(ap.summonerName ?? ''),
             currentGold: Number(ap.currentGold ?? 0),
-            level: Number(ap.level ?? 1)
+            level: Number(ap.level ?? 1),
+            ...(ap.championStats && Number(ap.championStats.maxHealth) > 0
+              ? {
+                  stats: {
+                    armor: Number(ap.championStats.armor ?? 0),
+                    magicResist: Number(ap.championStats.magicResist ?? 0),
+                    maxHealth: Number(ap.championStats.maxHealth ?? 0)
+                  }
+                }
+              : {})
           }
         : null,
     allPlayers: players

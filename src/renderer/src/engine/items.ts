@@ -12,9 +12,9 @@ import {
 import type { JunglerBuild, SituationContext } from '../data/junglers'
 import type { ItemCounters } from './catalog'
 import type { GameData, ItemInfo } from './gameData'
-import { clamp01, norm } from './normalize'
+import { norm } from './normalize'
 import type { ThreatProfile } from './threat'
-import { counterLift } from './variants'
+import { contextWeights, counterLift, stateWeights } from './variants'
 import { fmtPct, tr } from '../../../shared/i18n'
 
 export type StepKind = 'starter' | 'core' | 'boots' | 'antiheal' | 'situational' | 'owned'
@@ -41,6 +41,17 @@ export interface NextBuy {
 
 /** 6 emplacements : bottes + 5 objets légendaires (le familier se vend en fin de partie). */
 const MAX_LEGENDARIES = 5
+
+/** Élixir à acheter une fois le build terminé. */
+const ELIXIR: Record<Archetype, string> = {
+  AD_FIGHTER: 'Elixir of Wrath',
+  AD_ASSASSIN: 'Elixir of Wrath',
+  AD_CARRY: 'Elixir of Wrath',
+  AP_FIGHTER: 'Elixir of Sorcery',
+  AP_BURST: 'Elixir of Sorcery',
+  TANK: 'Elixir of Iron',
+  ENCHANTER: 'Elixir of Sorcery'
+}
 
 export interface ItemPlan {
   starter: ItemInfo[]
@@ -93,55 +104,59 @@ interface Scored {
 }
 
 const CONTEXT_LABEL: Record<SituationContext, [string, string]> = {
-  all: ['meilleur taux', 'best win rate'],
-  ap: ['gagne vs AP', 'wins vs AP'],
-  ad: ['gagne vs AD', 'wins vs AD'],
-  heal: ['gagne vs soins', 'wins vs healing'],
-  tank: ['gagne vs tanks', 'wins vs tanks'],
-  cc: ['gagne vs contrôles', 'wins vs CC']
-}
-
-/** Poids de chaque contexte mesuré selon la composition adverse actuelle. */
-function contextWeights(m: Record<Metric, number>): Record<SituationContext, number> {
-  return {
-    all: 0.6,
-    ap: clamp01((m.ap - 0.5) / 0.3),
-    ad: clamp01((m.ad - 0.5) / 0.3),
-    heal: m.heal,
-    tank: m.tanky,
-    cc: m.cc
-  }
+  all: ['souvent construit', 'often built'],
+  ap: ['construit vs AP', 'built vs AP'],
+  ad: ['construit vs AD', 'built vs AD'],
+  heal: ['construit vs soins', 'built vs healing'],
+  tank: ['construit vs tanks', 'built vs tanks'],
+  cc: ['construit vs contrôles', 'built vs CC'],
+  ahead: ['construit en avance', 'built when ahead'],
+  behind: ['construit en retard', 'built when behind']
 }
 
 /**
- * Score appris : dans les contextes qui ressemblent à la partie, à quel point les joueurs Master+
- * construisent cet objet (part) et à quel point il fait gagner (écart de taux de victoire lissé).
+ * Score appris de la méta pour ce champion : dans les contextes qui ressemblent à la partie
+ * (composition adverse, avance ou retard), à quel point les joueurs construisent cet objet (part
+ * des parties) et son écart de taux de victoire par rapport aux autres objets achetés au même rang
+ * et dans le même état de la partie (déjà lissé par la collecte).
+ *
+ * La part d'un objet dans un contexte est le signal le plus fiable : ce que les meilleurs joueurs
+ * construisent davantage face à ce type d'équipe ou dans cette situation.
  */
 function dataScore(
   item: ItemInfo,
   situational: JunglerBuild['situational'],
-  m: Record<Metric, number>
+  threat: ThreatProfile
 ): { score: number; reason?: string } | null {
   if (!situational) return null
-  const weights = contextWeights(m)
+  const weights: Partial<Record<SituationContext, number>> = {
+    all: 0.6,
+    ...contextWeights(threat),
+    ...stateWeights(threat)
+  }
+  const key = norm(item.name)
+  const usual = situational.all?.items.find((x) => norm(x.item) === key)?.share ?? 0
   let sum = 0
   let weightSum = 0
-  let best: { ctx: SituationContext; lift: number; value: number } | null = null
-  for (const ctx of Object.keys(weights) as SituationContext[]) {
+  let best: { ctx: SituationContext; share: number; value: number } | null = null
+  for (const [ctx, w] of Object.entries(weights) as [SituationContext, number][]) {
     const stats = situational[ctx]
-    const w = weights[ctx]
     if (!stats || w <= 0) continue
-    const entry = stats.items.find((x) => norm(x.item) === norm(item.name))
+    const entry = stats.items.find((x) => norm(x.item) === key)
     // Objet quasiment jamais construit dans ce contexte : léger malus.
     const value = entry ? entry.share * 0.9 + entry.lift * 6 : -0.05
     sum += w * value
     weightSum += w
-    if (entry && ctx !== 'all' && entry.lift > 0.015 && entry.share >= 0.08) {
-      if (!best || w * value > best.value) best = { ctx, lift: entry.lift, value: w * value }
+    // Raison : nettement plus construit dans ce contexte que d'habitude.
+    if (entry && ctx !== 'all' && entry.share >= 0.08 && entry.share - usual >= 0.04) {
+      const gain = w * (entry.share - usual)
+      if (!best || gain > best.value) best = { ctx, share: entry.share, value: gain }
     }
   }
   if (weightSum === 0) return null
-  const reason = best ? `${tr(...CONTEXT_LABEL[best.ctx])} (+${fmtPct(best.lift, 1)})` : undefined
+  const reason = best
+    ? `${tr(...CONTEXT_LABEL[best.ctx])} (${fmtPct(best.share)} ${tr('des parties', 'of games')})`
+    : undefined
   return { score: sum / weightSum, reason }
 }
 
@@ -161,12 +176,16 @@ function scoreItem(
     ITEM_RULES[item.name] ??
     Object.entries(ITEM_RULES).find(([k]) => norm(k) === norm(item.name))?.[1]
   const m = threat.metrics
+  // Objets défensifs : le besoin d'armure ou de résistance magique tient compte de ce que tu as
+  // déjà (voir threat.defense), pas seulement de la part des dégâts adverses.
+  const need: Record<Metric, number> =
+    rule?.role === 'defense' ? { ...m, ad: threat.defense.ad, ap: threat.defense.ap } : m
   let score = rule ? rule.base : 0.1
   let bestMetric: Metric | null = null
   let bestContribution = 0
   if (rule) {
     for (const [metric, weight] of Object.entries(rule.w) as [Metric, number][]) {
-      const c = weight * m[metric]
+      const c = weight * need[metric]
       score += c
       if (c > bestContribution) {
         bestContribution = c
@@ -174,7 +193,7 @@ function scoreItem(
       }
     }
   }
-  const learned = dataScore(item, situational, m)
+  const learned = dataScore(item, situational, threat)
   const optionBonus = optionIndex >= 0 ? Math.max(0.1, 0.45 - optionIndex * 0.07) : 0
   if (learned) {
     // Données Master+ disponibles : elles pèsent autant que les règles. En cas d'urgence en partie
@@ -200,10 +219,11 @@ function scoreItem(
   }
   if (learned?.reason && !(reason && reason.startsWith('vs '))) reason = learned.reason
   // Raison affichée seulement si l'effet repose sur assez de parties (sinon il compte, sans plus).
+  // (écarts déjà lissés par la collecte : 0,6 point est un effet établi.)
   if (
     counter.best &&
-    counter.lift >= 0.015 &&
-    counter.best.lift >= 0.015 &&
+    counter.lift >= 0.006 &&
+    counter.best.lift >= 0.006 &&
     counter.best.games >= 100
   )
     reason = `vs ${counter.best.foe} (+${fmtPct(counter.best.lift, 1)})`
@@ -227,11 +247,12 @@ function chooseBoots(
   const steel = gd.itemsByName.get(norm(BOOTS.steelcaps))
   const merc = gd.itemsByName.get(norm(BOOTS.mercury))
   if (threat.enemies.length === 0) return { item: defaultBoots }
-  // Bottes déjà choisies d'après les parties Master+ de ce contexte : les règles ne reprennent
-  // la main que face à un adversaire très en avance.
+  // Bottes déjà choisies d'après les parties de ce contexte (avantage établi par les données) : les
+  // règles ne reprennent la main que face à un adversaire très en avance.
   if (measured && Math.max(m.fedAp, m.fedAd) < 0.5) return { item: defaultBoots }
-  const steelNeed = m.ad * 0.8 + m.aa * 0.5 + m.crit * 0.3 + m.fedAd * 0.5
-  const mercNeed = m.ap * 0.8 + m.cc * 0.7 + m.fedAp * 0.5
+  // Besoin d'armure ou de résistance magique compte tenu de ce que tu as déjà (threat.defense).
+  const steelNeed = threat.defense.ad * 0.8 + m.aa * 0.5 + m.crit * 0.3 + m.fedAd * 0.5
+  const mercNeed = threat.defense.ap * 0.8 + m.cc * 0.7 + m.fedAp * 0.5
   const defaultIsDefensive =
     !!defaultBoots &&
     (norm(defaultBoots.name) === norm(BOOTS.steelcaps) ||
@@ -452,13 +473,7 @@ export function buildItemPlan(
   }
 
   // Bottes.
-  const boots = chooseBoots(
-    gd,
-    resolve(build.boots),
-    build.archetype,
-    threat,
-    !!build.choices?.boots
-  )
+  const boots = chooseBoots(gd, resolve(build.boots), build.archetype, threat, !!build.bootsLocked)
   const steps: BuildStep[] = []
   // Familier de jungle : premier achat de la partie.
   const pet = build.pet ? gd.itemsByName.get(norm(build.pet)) : undefined
@@ -663,6 +678,16 @@ export function buildItemPlan(
     }
   } else if (pending) {
     next = { item: pending.item, remaining: pending.item.total, affordable: false, component: null }
+  } else if (me && ownedLegendaries.length >= MAX_LEGENDARIES) {
+    // Build terminé : l'or restant sert à un élixir (dégâts ou survie selon le champion).
+    const elixir = gd.itemsByName.get(norm(ELIXIR[build.archetype]))
+    if (elixir && !ownsId(elixir.id))
+      next = {
+        item: elixir,
+        remaining: elixir.total,
+        affordable: currentGold >= elixir.total,
+        component: null
+      }
   }
 
   return { starter, steps, alternatives, next, unresolved: Array.from(new Set(unresolved)) }

@@ -125,8 +125,58 @@ export interface ThreatProfile {
   live: boolean
   /** Différence d'or des objets (équipe alliée − adverse), en partie. */
   goldDiff: number
+  /**
+   * Besoins défensifs, compte tenu de tes résistances actuelles : part de la valeur d'un point
+   * d'armure (`ad`) et d'un point de résistance magique (`ap`), total 1. Avant la partie, c'est la
+   * part des dégâts physiques et magiques adverses ; en partie, l'armure que tu as déjà rend la
+   * résistance magique plus rentable, et inversement.
+   */
+  defense: { ad: number; ap: number; armor: number; mr: number }
   /** Caractéristiques des objets adverses (anti-soins, % PV, boucliers…), en partie. */
   foeTraits: FoeTrait[]
+}
+
+/**
+ * Armure et résistance magique du joueur : valeurs de l'API en jeu si elles sont là, sinon une
+ * estimation (valeurs de base d'un champion moyen à ce niveau + objets).
+ */
+export function myResists(
+  gd: GameData,
+  live: LiveGameData | null,
+  me: LivePlayer | null
+): { armor: number; mr: number } {
+  const stats = live?.activePlayer?.stats
+  if (stats && stats.maxHealth > 0) return { armor: stats.armor, mr: stats.magicResist }
+  const level = me?.level ?? 1
+  let armor = 32 + 4.4 * (level - 1)
+  let mr = 31 + 1.7 * (level - 1)
+  for (const it of me?.items ?? []) {
+    const info = gd.items.get(it.itemID)
+    armor += info?.stats.FlatArmorMod ?? 0
+    mr += info?.stats.FlatSpellBlockMod ?? 0
+  }
+  return { armor, mr }
+}
+
+/**
+ * Valeur relative d'un point d'armure et d'un point de résistance magique face à des dégâts
+ * adverses `physical` / `magic` (parts, total 1). Le gain de points de vie effectifs d'un point
+ * d'armure vaut (part des dégâts physiques subis après réduction) / (100 + armure) : plus tu as
+ * d'armure, moins les dégâts physiques comptent dans ce que tu subis et moins un point de plus
+ * rapporte.
+ */
+export function defenseNeeds(
+  physical: number,
+  magic: number,
+  armor: number,
+  mr: number
+): { ad: number; ap: number } {
+  const p = physical / (1 + Math.max(0, armor) / 100)
+  const m = magic / (1 + Math.max(0, mr) / 100)
+  if (p + m <= 0) return { ad: 0.5, ap: 0.5 }
+  const vArmor = p / (p + m) / (100 + Math.max(0, armor))
+  const vMr = m / (p + m) / (100 + Math.max(0, mr))
+  return { ad: vArmor / (vArmor + vMr), ap: vMr / (vArmor + vMr) }
 }
 
 /** Statistiques offensives/défensives tirées des objets d'un joueur en partie. */
@@ -433,6 +483,32 @@ export function analyzeThreat(
       )
   }
 
+  // Besoins défensifs selon tes résistances actuelles.
+  const resists = myResists(gd, live, livePlayers?.me ?? null)
+  const needs = n > 0 ? defenseNeeds(metrics.ad, metrics.ap, resists.armor, resists.mr) : null
+  const defense = {
+    ad: needs?.ad ?? metrics.ad,
+    ap: needs?.ap ?? metrics.ap,
+    armor: resists.armor,
+    mr: resists.mr
+  }
+  if (livePlayers && needs) {
+    if (needs.ap - metrics.ap >= 0.15)
+      notes.push(
+        tr(
+          `Tu as déjà ${Math.round(resists.armor)} d'armure : la résistance magique te protège davantage maintenant.`,
+          `You already have ${Math.round(resists.armor)} armor: magic resist protects you more now.`
+        )
+      )
+    else if (needs.ad - metrics.ad >= 0.15)
+      notes.push(
+        tr(
+          `Tu as déjà ${Math.round(resists.mr)} de résistance magique : l'armure te protège davantage maintenant.`,
+          `You already have ${Math.round(resists.mr)} magic resist: armor protects you more now.`
+        )
+      )
+  }
+
   return {
     metrics,
     enemies,
@@ -442,6 +518,7 @@ export function analyzeThreat(
     allyDamage,
     live: livePlayers !== null,
     goldDiff,
+    defense,
     foeTraits: foeTraitsOf(foeItemTraits)
   }
 }

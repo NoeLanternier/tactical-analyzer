@@ -146,6 +146,8 @@ export interface LiveGameData {
     summonerName: string
     currentGold: number
     level: number
+    /** Statistiques actuelles du joueur (API en jeu), si disponibles. */
+    stats?: { armor: number; magicResist: number; maxHealth: number }
   } | null
   allPlayers: LivePlayer[]
 }

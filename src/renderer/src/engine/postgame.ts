@@ -1157,7 +1157,15 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
   // aux adversaires.
   const planAt = (live: LiveGameData, meLive: LivePlayer | null, gold: number): ItemPlan => {
     const threat = analyzeThreat(gd, enemyKeys, allyKeys, live, champ!.id, catalog.profiles)
-    const variant = chooseVariant(gd, build!, threat, meLive, catalog.itemCounters, catalog.tuning)
+    const variant = chooseVariant(
+      gd,
+      build!,
+      threat,
+      meLive,
+      catalog.itemCounters,
+      catalog.tuning,
+      catalog.priors
+    )
     const b = found?.generic
       ? variant.build
       : adaptChoices(
@@ -1165,7 +1173,9 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
           threat,
           directFoe,
           variant.chosen?.variant.runeChoices,
-          catalog.tuning
+          catalog.tuning,
+          catalog.priors,
+          build!.winRate
         ).build
     return buildItemPlan(
       gd,

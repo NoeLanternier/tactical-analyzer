@@ -22,7 +22,10 @@ const TUNING_LABEL: Record<TuningKey, [string, string]> = {
 function EngineCard({ t }: { t: TactiqueState }): ReactElement | null {
   const bt = t.catalog.backtest
   const tuning = t.catalog.tuning
-  if (!bt && !tuning) return null
+  const priors = t.catalog.priors
+  if (!bt && !tuning && !priors) return null
+  // Part d'un écart observé sur 300 parties qui est retenue (300 / (300 + k)).
+  const kept = (k: number): string => fmtPct(300 / (300 + k))
   const rate = (c: { games: number; winRate: number | null }): string =>
     c.winRate === null ? '—' : `${fmtPct(c.winRate, 1)} (${fmtNumber(c.games)})`
   return (
@@ -31,8 +34,8 @@ function EngineCard({ t }: { t: TactiqueState }): ReactElement | null {
         <div className="mb-2 text-[10px] leading-snug text-slate-400">
           <p className="mb-1 text-slate-500">
             {tr(
-              `Parties jugées avec la méta de la veille (${fmtNumber(bt.games)}) : taux de victoire des joueurs qui ont suivi la recommandation, ou non.`,
-              `Games judged with the previous day’s meta (${fmtNumber(bt.games)}): win rate of players who followed the recommendation, or not.`
+              `Parties jugées avec la méta précédente (${fmtNumber(bt.games)}) : taux de victoire des joueurs qui ont suivi la recommandation, ou non.`,
+              `Games judged with the previous meta (${fmtNumber(bt.games)}): win rate of players who followed the recommendation, or not.`
             )}
           </p>
           <p>
@@ -42,11 +45,43 @@ function EngineCard({ t }: { t: TactiqueState }): ReactElement | null {
             {rate(bt.variant.other)}
           </p>
           <p>
-            {tr('Objets situationnels : suivis ', 'Situational items: followed ')}
+            {tr(
+              'Objets après le cœur (achats comparés au même rang) : conseillés ',
+              'Items after the core (purchases compared at the same rank): suggested '
+            )}
             <b className="text-slate-200">{rate(bt.items.high)}</b>
-            {tr(' · ignorés ', ' · ignored ')}
+            {tr(' · autres ', ' · others ')}
             {rate(bt.items.low)}
           </p>
+        </div>
+      )}
+      {priors && (
+        <div className="mb-2 text-[10px] leading-snug text-slate-400">
+          <p className="mb-1 text-slate-500">
+            {tr(
+              'Fiabilité mesurée sur les parties du patch : part d’un écart observé sur 300 parties qui est réellement retenue (le reste est du hasard).',
+              'Reliability measured on this patch’s games: share of a gap observed over 300 games that is actually kept (the rest is chance).'
+            )}
+          </p>
+          <ul className="grid grid-cols-2 gap-x-2">
+            {(
+              [
+                [tr('Adversaire direct', 'Direct opponent'), priors.vs],
+                [tr('Alliés / adversaires', 'Allies / enemies'), priors.pair],
+                [tr('Composition adverse', 'Enemy composition'), priors.comp],
+                [tr('Famille de build', 'Build family'), priors.fam],
+                [tr('Page de runes', 'Rune page'), priors.runes],
+                [tr('Bottes', 'Boots'), priors.boots],
+                [tr('Objet à son rang', 'Item at its rank'), priors.slot],
+                [tr('Choix selon l’adversaire', 'Choice vs enemy team'), priors.choiceCtx]
+              ] as [string, number][]
+            ).map(([label, k]) => (
+              <li key={label} className="flex justify-between">
+                <span>{label}</span>
+                <b className="text-slate-300">{kept(k)}</b>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {tuning && (

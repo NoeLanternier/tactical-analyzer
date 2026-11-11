@@ -198,10 +198,20 @@ function BanRow({ b, v }: { b: BanAdvice; v: string }): ReactElement {
       <div className="min-w-0 flex-1">
         <div className="truncate text-xs text-slate-100">{b.champ.label}</div>
         <div className="line-clamp-2 text-[10px] leading-snug text-slate-400">
-          {b.reasons.join(' · ') || tr('fort ce patch', 'strong this patch')}
+          {b.reasons.join(' · ') || tr('souvent joué à ton poste', 'often played in your role')}
         </div>
       </div>
-      <span className="shrink-0 text-[10px] tabular-nums text-slate-400">{pct(b.winRate)}</span>
+      {b.cost >= 0.003 && (
+        <span
+          title={tr(
+            `Ce qu’il te coûte quand l’adversaire le prend (environ ${pct(b.chance)} des parties s’il n’est pas banni).`,
+            `What it costs you when the enemy picks it (about ${pct(b.chance)} of games if not banned).`
+          )}
+          className="shrink-0 text-right text-[10px] tabular-nums text-orange-300"
+        >
+          −{fmtNumber(b.cost * 100, 1)} pt
+        </span>
+      )}
     </li>
   )
 }

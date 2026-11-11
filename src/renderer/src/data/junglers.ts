@@ -43,6 +43,8 @@ export interface JunglerBuild {
   boots: string
   /** Objets de départ (méta distante ; absent : familier + potion en jungle, Doran… sinon). */
   start?: string[]
+  /** Bottes déjà choisies d'après les parties de ce contexte (les règles ne les changent plus). */
+  bootsLocked?: boolean
   /** Départs courants à ce poste (au moins 8 % des parties), avec leur part et leur taux. */
   startOptions?: StartOption[]
   /** Trois premiers objets légendaires, dans l'ordre d'achat. */
@@ -109,7 +111,11 @@ export interface BuildVariant {
 }
 
 /** Contextes adverses mesurés par le pipeline : tous, très AP, très AD, soins, tanky, contrôles. */
-export type SituationContext = 'all' | 'ap' | 'ad' | 'heal' | 'tank' | 'cc'
+/**
+ * Contextes mesurés : composition adverse (très AP, très AD, soins, résistante, contrôles) et, pour
+ * les objets, avance ou retard de l'équipe au moment de l'achat.
+ */
+export type SituationContext = 'all' | 'ap' | 'ad' | 'heal' | 'tank' | 'cc' | 'ahead' | 'behind'
 
 export interface SituationalStats {
   /** Nombre de parties du champion dans ce contexte. */

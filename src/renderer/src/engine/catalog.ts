@@ -19,6 +19,7 @@ import { resolveSpec } from './runes'
 import { profileOf, type MeasuredProfiles } from './threat'
 import { tr } from '../../../shared/i18n'
 import { parseTuning, type EngineTuning } from './tuning'
+import { parsePriors, type Priors } from './stats'
 
 // Catalogue des builds : base tactique + mise à jour distante éventuelle + build générique pour
 // tout champion absent de la base (nouveau champion, pick original...).
@@ -92,6 +93,14 @@ export interface Catalog {
   backtest?: BacktestSummary
   /** Niveau de jeu des statistiques des junglers et des repères (méta distante). */
   statsBracket?: 'master' | 'gold'
+  /** Force de lissage de chaque famille de statistiques, mesurée par la collecte. */
+  priors?: Priors
+  /**
+   * Champions vus dans l'équipe adverse, tous postes confondus : [parties, taux de victoire de
+   * leur équipe, part des parties où ils sont bannis]. `threatGames` : parties de référence.
+   */
+  threats?: Record<string, [number, number, number?]>
+  threatGames?: number
 }
 
 export interface BacktestCell {
@@ -102,7 +111,7 @@ export interface BacktestSummary {
   games: number
   /** Famille de build recommandée suivie, ou non. */
   variant: { followed: BacktestCell; other: BacktestCell }
-  /** Objets situationnels recommandés : au moins 2 achetés (high), aucun (low). */
+  /** Achats du 4e au 6e objet : parmi les objets conseillés (high) ou non (low), au même rang. */
   items: { high: BacktestCell; low: BacktestCell }
 }
 
@@ -176,6 +185,11 @@ export function mergeOverride(
   const builds = new Map(base.builds)
   const patch = typeof raw?.patch === 'string' ? raw.patch : base.patch
   const bracket: 'master' | 'gold' = raw?.bracket === 'gold' ? 'gold' : 'master'
+  // Méta d'avant les lissages mesurés : ses écarts d'objets, peu lissés, sont réduits, et ses
+  // objets face aux adversaires, son réglage et son backtest (anciens calculs) sont ignorés.
+  const priors = parsePriors(raw?.priors)
+  const legacy = !priors
+  const threats = parseThreats(raw?.threats)
   let accepted = 0
   let rejected = 0
   for (const b of list) {
@@ -192,7 +206,7 @@ export function mergeOverride(
             : undefined,
         startOptions: parseStartOptions(b.startOptions),
         bracket,
-        situational: parseSituational(b.situational),
+        situational: parseSituational(b.situational, legacy),
         variants: parseVariants(b.variants),
         choices: parseChoices(b.choices)
       })
@@ -210,9 +224,14 @@ export function mergeOverride(
       junglerStats: mergeStats(base.junglerStats, parseJunglerStats(raw?.junglers)),
       benchmarks: parseBenchmarks(raw?.benchmarks) ?? base.benchmarks,
       statsBracket: parseJunglerStats(raw?.junglers) ? bracket : base.statsBracket,
-      itemCounters: parseItemCounters(raw?.itemCounters) ?? base.itemCounters,
+      itemCounters: legacy
+        ? base.itemCounters
+        : (parseItemCounters(raw?.itemCounters) ?? base.itemCounters),
       tuning: parseTuning(raw?.tuning) ?? base.tuning,
-      backtest: parseBacktest(raw?.backtest) ?? base.backtest
+      backtest: parseBacktest(raw?.backtest) ?? base.backtest,
+      priors: priors ?? base.priors,
+      threats: threats ?? base.threats,
+      threatGames: threats ? (sampleGames ?? undefined) : base.threatGames
     },
     accepted,
     rejected,
@@ -259,11 +278,23 @@ function parseStartOptions(raw: any): JunglerBuild['startOptions'] {
 const num = (x: any): number | null => (typeof x === 'number' && Number.isFinite(x) ? x : null)
 
 const CONTEXT_KEYS: SituationContext[] = ['all', 'ap', 'ad', 'heal', 'tank', 'cc']
+/** Contextes des objets : composition adverse, et avance ou retard au moment de l'achat. */
+const ITEM_CONTEXT_KEYS: SituationContext[] = [...CONTEXT_KEYS, 'ahead', 'behind']
 
-function parseSituational(raw: any): JunglerBuild['situational'] {
+function parseThreats(raw: any): Catalog['threats'] {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: NonNullable<Catalog['threats']> = {}
+  for (const [id, v] of Object.entries<any>(raw)) {
+    if (!Array.isArray(v) || num(v[0]) === null || num(v[1]) === null) continue
+    out[id] = num(v[2]) !== null ? [v[0], v[1], v[2]] : [v[0], v[1]]
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseSituational(raw: any, legacy = false): JunglerBuild['situational'] {
   if (!raw || typeof raw !== 'object') return undefined
   const out: NonNullable<JunglerBuild['situational']> = {}
-  for (const ctx of CONTEXT_KEYS) {
+  for (const ctx of ITEM_CONTEXT_KEYS) {
     const c = raw[ctx]
     if (!c || !Array.isArray(c.items) || num(c.games) === null) continue
     const items = c.items
@@ -273,7 +304,8 @@ function parseSituational(raw: any): JunglerBuild['situational'] {
       .map((x: any) => ({
         item: x.item,
         share: x.share,
-        lift: x.lift,
+        // Ancienne méta : écarts très peu lissés (surtout du hasard), réduits ici.
+        lift: legacy ? x.lift * 0.2 : x.lift,
         games: num(x.games) ?? 0,
         ...(num(x.minute) !== null ? { minute: x.minute } : {})
       }))
@@ -378,7 +410,8 @@ function parseChoices(raw: any): BuildChoices | undefined {
 function parseBacktest(raw: any): BacktestSummary | undefined {
   const cell = (c: any): BacktestCell | null =>
     num(c?.games) !== null ? { games: c.games, winRate: num(c.winRate) } : null
-  if (num(raw?.games) === null) return undefined
+  // Ancien backtest (v absent) : il comparait des parties de longueurs différentes, on l'ignore.
+  if (num(raw?.games) === null || raw?.v !== 2) return undefined
   const followed = cell(raw.variant?.followed)
   const other = cell(raw.variant?.other)
   const high = cell(raw.items?.high)

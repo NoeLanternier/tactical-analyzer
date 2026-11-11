@@ -92,9 +92,15 @@ const clamp = (x: number, lo: number, hi: number): number => Math.max(lo, Math.m
 const avg = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / Math.max(xs.length, 1)
 const fr1 = (x: number): string => fmtNumber(x, 1)
 
-const MIN_CHAMP_GAMES = 4
-const MIN_GLOBAL_GAMES = 6
-const MAX_BONUS = 0.12
+const MIN_CHAMP_GAMES = 8
+const MIN_GLOBAL_GAMES = 12
+const MAX_BONUS = 0.08
+/**
+ * Force du lissage de tes résultats avec un objet (parties a priori) : quelques parties gagnées
+ * avec un objet ne prouvent presque rien (un objet tardif figure surtout dans les parties déjà
+ * gagnées), il en faut des dizaines pour que le bonus compte.
+ */
+const ITEM_K = 40
 
 export const EMPTY_LEARNING: Learning = {
   games: 0,
@@ -133,7 +139,7 @@ export function computeLearning(reports: GameReport[]): Learning {
       count(`${champ}|${norm(it.name)}`, it.label, r.win)
     }
   }
-  const delta = (s: { g: number; w: number }): number => bayes(s.w, s.g, base, 6) - base
+  const delta = (s: { g: number; w: number }): number => bayes(s.w, s.g, base, ITEM_K) - base
 
   const bonusFor =
     (champId: string | null): PersonalItemBonus =>
@@ -153,7 +159,7 @@ export function computeLearning(reports: GameReport[]): Learning {
       return {
         bonus,
         reason:
-          bonus >= 0.06
+          bonus >= 0.05
             ? tr(`vous réussit (${s.w}/${s.g} V)`, `works for you (${s.w}/${s.g} W)`)
             : undefined
       }

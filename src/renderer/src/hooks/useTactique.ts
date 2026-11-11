@@ -423,10 +423,18 @@ export function useTactique(): TactiqueState {
   const variant = useMemo(
     () =>
       gd && baseBuild && threat
-        ? chooseVariant(gd, baseBuild, threat, me, catalog.itemCounters, catalog.tuning)
+        ? chooseVariant(
+            gd,
+            baseBuild,
+            threat,
+            me,
+            catalog.itemCounters,
+            catalog.tuning,
+            catalog.priors
+          )
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
-    [gd, baseBuild, threat, me, catalog.itemCounters, catalog.tuning, lang]
+    [gd, baseBuild, threat, me, catalog.itemCounters, catalog.tuning, catalog.priors, lang]
   )
   // Jungler adverse (sélection ou partie) et adaptation des runes, bottes, familier et compétences.
   // Adversaire direct : en partie, l'adversaire au même poste (quand le jeu le donne) ; sinon celui
@@ -453,10 +461,12 @@ export function useTactique(): TactiqueState {
       threat,
       enemyJungler,
       variant?.chosen?.variant.runeChoices,
-      catalog.tuning
+      catalog.tuning,
+      catalog.priors,
+      baseBuild?.winRate
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
-  }, [variant, baseBuild, threat, genericBuild, enemyJungler, catalog.tuning, lang])
+  }, [variant, baseBuild, threat, genericBuild, enemyJungler, catalog.tuning, catalog.priors, lang])
   const build = adapted?.build ?? null
   // Affrontement de junglers : seulement avant la partie (statistiques, rien de ce qui se passe en jeu).
   // Édition publique : avant la partie seulement (rien de ce qui se passe en jeu).

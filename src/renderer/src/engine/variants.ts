@@ -6,6 +6,7 @@ import { FOE_TRAIT_LABEL } from './itemTraits'
 import { clamp01, norm } from './normalize'
 import { threatWeight, type ThreatProfile } from './threat'
 import { tw, type EngineTuning } from './tuning'
+import { DEFAULT_PRIORS, shrunk as bayes, type Priors } from './stats'
 import { fmtPct, tr } from '../../../shared/i18n'
 
 // Choix de la famille de build (ex. Graves crit ou létalité, Diana AP ou tank) :
@@ -31,10 +32,10 @@ export interface VariantChoice {
   reason: string | null
 }
 
-const bayes = (games: number, wr: number, prior: number, k: number): number =>
-  (wr * games + prior * k) / (games + k)
-
-/** Poids de chaque contexte mesuré selon l'adversaire (comme le score des objets). */
+/**
+ * Poids de chaque contexte de composition adverse dans cette partie (familles de build, choix de
+ * runes, score des objets).
+ */
 export function contextWeights(threat: ThreatProfile): Partial<Record<SituationContext, number>> {
   if (threat.enemies.length === 0) return {}
   const m = threat.metrics
@@ -44,6 +45,20 @@ export function contextWeights(threat: ThreatProfile): Partial<Record<SituationC
     heal: m.heal,
     tank: m.tanky,
     cc: m.cc
+  }
+}
+
+/**
+ * Poids des contextes « en avance » et « en retard » (objets) : l'écart d'or des objets entre les
+ * deux équipes, 2 % d'écart ne comptant pas et 10 % comptant pleinement. Le retard personnel compte
+ * aussi (voir threat.ts).
+ */
+export function stateWeights(threat: ThreatProfile): Partial<Record<SituationContext, number>> {
+  if (!threat.live) return {}
+  const m = threat.metrics
+  return {
+    ahead: clamp01((0.25 * m.ahead - 0.02) / 0.08),
+    behind: clamp01((0.25 * m.behind - 0.02) / 0.08)
   }
 }
 
@@ -147,7 +162,8 @@ export function chooseVariant(
   threat: ThreatProfile,
   me: LivePlayer | null,
   counters?: ItemCounters,
-  tuning?: EngineTuning
+  tuning?: EngineTuning,
+  priors: Priors = DEFAULT_PRIORS
 ): VariantChoice {
   const variants = build.variants ?? []
   if (variants.length < 2) return { build, chosen: null, options: [], locked: false, reason: null }
@@ -156,11 +172,17 @@ export function chooseVariant(
   const weights = contextWeights(threat)
   const allyAp = threat.allyDamage?.ap ?? null
   const reasons = new Map<BuildVariant, string>()
+  const topShare = Math.max(0.01, ...variants.map((v) => v.share))
 
   const options = variants
     .map((v) => {
-      // Poids des critères réglés par le pipeline (1 sans réglage).
-      const base = prior + tw(tuning, 'famBase') * (bayes(v.games, v.winRate, prior, 60) - prior)
+      // Écart de la famille, lissé avec la force mesurée par la collecte (voir stats.ts) ; a priori,
+      // la famille la plus jouée est un peu meilleure (lien popularité → victoire mesuré).
+      const mu = priors.slope.item * Math.log2(Math.max(v.share, 0.01) / topShare)
+      const base =
+        prior +
+        mu +
+        tw(tuning, 'famBase') * (bayes(v.games, v.winRate - mu, prior, priors.fam) - prior)
       // Contextes adverses de la partie.
       let sum = 0
       let weightSum = 0
@@ -168,7 +190,7 @@ export function chooseVariant(
       for (const [ctx, w] of Object.entries(weights) as [SituationContext, number][]) {
         const cell = v.contexts[ctx]
         if (!cell || w <= 0) continue
-        const rate = bayes(cell[0], cell[1], base, 30)
+        const rate = bayes(cell[0], cell[1], base, priors.famCtx)
         sum += w * (rate - base)
         weightSum += w
         const label = CONTEXT_LABEL[ctx]
