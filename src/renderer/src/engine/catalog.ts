@@ -19,7 +19,7 @@ import { resolveSpec } from './runes'
 import { profileOf, type MeasuredProfiles } from './threat'
 import { tr } from '../../../shared/i18n'
 import { parseTuning, type EngineTuning } from './tuning'
-import { parsePriors, type Priors } from './stats'
+import { parseFit, parsePriors, type Priors, type TeamFit } from './stats'
 
 // Catalogue des builds : base tactique + mise à jour distante éventuelle + build générique pour
 // tout champion absent de la base (nouveau champion, pick original...).
@@ -54,6 +54,20 @@ export type DuelPeriod = 'early' | 'mid' | 'late'
 const DUEL_PERIODS: DuelPeriod[] = ['early', 'mid', 'late']
 
 /** Repères d'un jungler Master+ (moyennes du patch, méta distante). */
+/** Augment d'ARAM Mayhem (données du jeu, publiées par la collecte). */
+export interface AugmentInfo {
+  id: number
+  name: string
+  nameFr: string
+  rarity: 'silver' | 'gold' | 'prismatic'
+  /** Chemin de l'icône dans les données du jeu (CommunityDragon). */
+  icon: string
+  /** Tous champions confondus : parties, taux de victoire, écart estimé (lissé). */
+  games?: number
+  winRate?: number
+  lift?: number
+}
+
 export interface Benchmark {
   games: number
   /** Sbires + monstres à 10 et 15 min. */
@@ -69,6 +83,14 @@ export interface Benchmark {
   kp: number
   visionPerMin: number
   controlWardsPer10: number
+  /**
+   * Modes sans voie (ARAM…) : or et dégâts aux champions par minute, morts par 10 minutes, part
+   * des dégâts de l'équipe (absents des métas de la Faille).
+   */
+  goldPerMin?: number
+  dmgPerMin?: number
+  deathsPer10?: number
+  dmgShare?: number
 }
 
 export interface Catalog {
@@ -95,6 +117,15 @@ export interface Catalog {
   statsBracket?: 'master' | 'gold'
   /** Force de lissage de chaque famille de statistiques, mesurée par la collecte. */
   priors?: Priors
+  /** Équilibre de l'équipe mesuré par la collecte (absent des métas plus anciennes). */
+  fit?: TeamFit
+  /**
+   * Modes : runes et augments réellement utilisés dans les parties collectées (ARAM Mayhem : pas
+   * de runes). Absent : valeurs par défaut du mode.
+   */
+  features?: { runes: boolean; augments: boolean }
+  /** Augments du mode (ARAM Mayhem) : nom, rareté, icône. */
+  augmentInfo?: Record<number, AugmentInfo>
   /**
    * Champions vus dans l'équipe adverse, tous postes confondus : [parties, taux de victoire de
    * leur équipe, part des parties où ils sont bannis]. `threatGames` : parties de référence.
@@ -141,6 +172,16 @@ const ARCHETYPES: Archetype[] = [
 ]
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/**
+ * Modes sans runes (ARAM Mayhem) : la collecte publie les builds sans page (runes: null). On leur
+ * donne la page générique de leur archétype, jamais envoyée au client (runes désactivées).
+ */
+function withRunes(x: any): any {
+  return x && x.runes === null && ARCHETYPES.includes(x.archetype)
+    ? { ...x, runes: GENERIC_RUNES[x.archetype as Archetype] }
+    : x
+}
+
 function isBuild(x: any): x is JunglerBuild {
   return x && typeof x.id === 'string' && isBuildShape(x)
 }
@@ -192,7 +233,8 @@ export function mergeOverride(
   const threats = parseThreats(raw?.threats)
   let accepted = 0
   let rejected = 0
-  for (const b of list) {
+  for (const raw0 of list) {
+    const b = withRunes(raw0)
     if (isBuild(b)) {
       builds.set(b.id, {
         ...b,
@@ -207,8 +249,9 @@ export function mergeOverride(
         startOptions: parseStartOptions(b.startOptions),
         bracket,
         situational: parseSituational(b.situational, legacy),
-        variants: parseVariants(b.variants),
-        choices: parseChoices(b.choices)
+        variants: parseVariants(Array.isArray(b.variants) ? b.variants.map(withRunes) : b.variants),
+        choices: parseChoices(b.choices),
+        augments: parseAugmentStats(b.augments)
       })
       accepted++
     } else rejected++
@@ -230,6 +273,9 @@ export function mergeOverride(
       tuning: parseTuning(raw?.tuning) ?? base.tuning,
       backtest: parseBacktest(raw?.backtest) ?? base.backtest,
       priors: priors ?? base.priors,
+      fit: parseFit(raw?.fit) ?? base.fit,
+      features: parseFeatures(raw?.features) ?? base.features,
+      augmentInfo: parseAugmentInfo(raw?.augmentInfo) ?? base.augmentInfo,
       threats: threats ?? base.threats,
       threatGames: threats ? (sampleGames ?? undefined) : base.threatGames
     },
@@ -280,6 +326,52 @@ const num = (x: any): number | null => (typeof x === 'number' && Number.isFinite
 const CONTEXT_KEYS: SituationContext[] = ['all', 'ap', 'ad', 'heal', 'tank', 'cc']
 /** Contextes des objets : composition adverse, et avance ou retard au moment de l'achat. */
 const ITEM_CONTEXT_KEYS: SituationContext[] = [...CONTEXT_KEYS, 'ahead', 'behind']
+
+function parseFeatures(raw: any): Catalog['features'] {
+  if (!raw || typeof raw !== 'object') return undefined
+  if (typeof raw.runes !== 'boolean' || typeof raw.augments !== 'boolean') return undefined
+  return { runes: raw.runes, augments: raw.augments }
+}
+
+const RARITIES = ['silver', 'gold', 'prismatic'] as const
+function parseAugmentInfo(raw: any): Catalog['augmentInfo'] {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: Record<number, AugmentInfo> = {}
+  for (const [k, a] of Object.entries<any>(raw)) {
+    const id = Number(k)
+    if (!(id > 0) || typeof a?.name !== 'string' || !RARITIES.includes(a.rarity)) continue
+    out[id] = {
+      id,
+      name: a.name,
+      nameFr: typeof a.nameFr === 'string' && a.nameFr ? a.nameFr : a.name,
+      rarity: a.rarity,
+      icon: typeof a.icon === 'string' ? a.icon : '',
+      ...(num(a.games) !== null && num(a.winRate) !== null && num(a.lift) !== null
+        ? { games: a.games, winRate: a.winRate, lift: Math.max(-0.1, Math.min(0.1, a.lift)) }
+        : {})
+    }
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseAugmentStats(raw: any): JunglerBuild['augments'] {
+  if (!Array.isArray(raw)) return undefined
+  const out = raw
+    .filter(
+      (a: any) =>
+        Number(a?.id) > 0 &&
+        num(a?.games) !== null &&
+        num(a?.winRate) !== null &&
+        num(a?.lift) !== null
+    )
+    .map((a: any) => ({
+      id: Number(a.id),
+      games: a.games,
+      winRate: a.winRate,
+      lift: Math.max(-0.1, Math.min(0.1, a.lift))
+    }))
+  return out.length ? out : undefined
+}
 
 function parseThreats(raw: any): Catalog['threats'] {
   if (!raw || typeof raw !== 'object') return undefined
@@ -504,6 +596,7 @@ function parseJunglerStats(raw: any): Record<string, JunglerStat> | undefined {
   return Object.keys(out).length ? out : undefined
 }
 
+const MODE_BENCH_KEYS = ['goldPerMin', 'dmgPerMin', 'deathsPer10', 'dmgShare'] as const
 const BENCH_KEYS = [
   'games',
   'cs10',
@@ -525,6 +618,7 @@ function parseBenchmarks(raw: any): Record<string, Benchmark> | undefined {
     // Valeurs aberrantes (trop peu de parties, bug) : ignorées.
     if (b.cs10 <= 0 || b.firstItem <= 0 || b.secondItem <= b.firstItem || b.kp <= 0) continue
     out[id] = Object.fromEntries(BENCH_KEYS.map((k) => [k, b[k]])) as unknown as Benchmark
+    for (const k of MODE_BENCH_KEYS) if ((num(b[k]) ?? 0) > 0) out[id][k] = b[k]
   }
   return Object.keys(out).length ? out : undefined
 }

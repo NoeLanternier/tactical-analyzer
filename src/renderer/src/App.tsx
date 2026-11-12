@@ -184,6 +184,14 @@ export default function App(): ReactElement {
               )}
             </p>
           )}
+          {t.mode === null && (
+            <p className="mb-2 rounded bg-orange-500/10 px-2 py-1 text-[10px] leading-snug text-orange-200">
+              {tr(
+                'Mode de jeu non pris en charge (Arène…) : les conseils affichés sont ceux de la Faille, à titre indicatif.',
+                'Game mode not supported (Arena…): the advice shown is for Summoner’s Rift, for reference only.'
+              )}
+            </p>
+          )}
           {!t.gd && (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-sm text-slate-400">
               <LoaderCircle className="animate-spin text-gold" />

@@ -18,6 +18,7 @@ import { JournalRecorder } from './journal'
 import { langFromLocale, setLang, tr, type Lang } from '../shared/i18n'
 import { loadMetaCache, saveMetaCache } from './metaCache'
 import { getRiotStart } from './riotStart'
+import { RIOT_COMPLIANT } from '../shared/edition'
 import {
   metaFallbackUrl,
   type ItemSetPayload,
@@ -122,7 +123,8 @@ function registerIpc(): void {
     lang,
     status: lcu.status,
     phase: lcu.phase,
-    draft: lcu.draft
+    draft: lcu.draft,
+    queue: lcu.queue
   }))
 
   ipcMain.handle('apply-runes', (_e, payload: RunePagePayload) =>
@@ -131,8 +133,19 @@ function registerIpc(): void {
 
   ipcMain.handle('apply-item-set', (_e, payload: ItemSetPayload) => lcu.applyItemSet(payload))
 
-  ipcMain.handle('get-recommended-runes', (_e, championId: number, position: string) =>
-    lcu.getRecommendedRunes(championId, position)
+  ipcMain.handle(
+    'get-recommended-runes',
+    (_e, championId: number, position: string, mapId?: number) =>
+      lcu.getRecommendedRunes(championId, position, Number(mapId) || 11)
+  )
+  // Banc et relances : actions dans le client, édition personnelle seulement.
+  ipcMain.handle('swap-with-bench', (_e, championId: number) =>
+    RIOT_COMPLIANT
+      ? { success: false, error: 'unsupported' }
+      : lcu.swapWithBench(Number(championId))
+  )
+  ipcMain.handle('reroll', () =>
+    RIOT_COMPLIANT ? { success: false, error: 'unsupported' } : lcu.reroll()
   )
   ipcMain.handle('get-riot-start', (_e, alias: string) => getRiotStart(String(alias)))
 
@@ -238,6 +251,7 @@ app.whenReady().then(() => {
   lcu.on('status', (s) => send('lcu-status', s))
   lcu.on('phase', (p) => send('lcu-phase-update', p))
   lcu.on('draft', (d) => send('lcu-draft-update', d))
+  lcu.on('queue', (q) => send('lcu-queue-update', q))
   lcu.on('locale', () => updateLang())
   live.on('update', (d) => {
     journal.update(d)

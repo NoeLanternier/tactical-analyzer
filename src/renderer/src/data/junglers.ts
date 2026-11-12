@@ -67,6 +67,17 @@ export interface JunglerBuild {
   variants?: BuildVariant[]
   /** Options courantes mesurées par contexte adverse (runes, bottes, familier, compétences). */
   choices?: BuildChoices
+  /** ARAM Mayhem : augments choisis avec ce champion (méta du mode), du meilleur au moins bon. */
+  augments?: AugmentStat[]
+}
+
+/** Augment choisi avec un champion : parties, taux de victoire, et écart estimé (lissé). */
+export interface AugmentStat {
+  id: number
+  games: number
+  winRate: number
+  /** Écart de taux de victoire estimé par rapport aux autres augments du même rang (0,01 = 1 pt). */
+  lift: number
 }
 
 /** Une option mesurée : parties, taux de victoire, part des parties et taux par contexte. */

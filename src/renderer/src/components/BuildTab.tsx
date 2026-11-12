@@ -8,7 +8,17 @@ import { fmtNumber, fmtPct, gold, tr } from '../../../shared/i18n'
 import { Card, Chip, ItemIcon, RuneIcon } from './ui'
 import { AdviceCard, PickVerdictCard } from './AdviceCard'
 import { levelName } from '../engine/metaLevel'
-import { roleLabel } from '../engine/role'
+import { isMode, roleLabel } from '../engine/role'
+import { MODES } from '../../../shared/modes'
+import { RIOT_COMPLIANT } from '../../../shared/edition'
+import {
+  RARITY_ORDER,
+  augmentAdvice,
+  augmentIconUrl,
+  augmentName,
+  type AugmentPick,
+  type Rarity
+} from '../engine/augments'
 
 const ARCHETYPE_LABEL: Record<string, [string, string]> = {
   AD_FIGHTER: ['Combattant AD', 'AD Fighter'],
@@ -28,6 +38,104 @@ const KIND_LABEL: Record<string, [string, string]> = {
   antiheal: ['Anti-soins', 'Anti-heal'],
   situational: ['Situationnel', 'Situational'],
   owned: ['Acheté', 'Bought']
+}
+
+const RARITY_LABEL: Record<Rarity, [string, string]> = {
+  silver: ['Argent', 'Silver'],
+  gold: ['Or', 'Gold'],
+  prismatic: ['Prismatique', 'Prismatic']
+}
+const RARITY_TONE: Record<Rarity, string> = {
+  silver: 'text-slate-300',
+  gold: 'text-gold',
+  prismatic: 'text-fuchsia-300'
+}
+
+function AugmentChip({ p }: { p: AugmentPick }): ReactElement {
+  const url = augmentIconUrl(p.info)
+  const title = `${augmentName(p.info)} — ${p.lift >= 0 ? '+' : '−'}${fmtNumber(Math.abs(p.lift) * 100, 1)} pt${
+    p.winRate !== null ? ` · ${fmtPct(p.winRate, 1)}` : ''
+  } · ${fmtNumber(p.games)} ${tr('parties', 'games')}${
+    p.ownData ? '' : ` (${tr('tous champions', 'all champions')})`
+  }`
+  return (
+    <span
+      title={title}
+      className="flex items-center gap-1 rounded bg-white/5 px-1 py-0.5 text-[10px] text-slate-200"
+    >
+      {url && <img src={url} alt="" className="h-4 w-4" />}
+      <span className="max-w-[110px] truncate">{augmentName(p.info)}</span>
+      <span className={p.lift >= 0 ? 'text-emerald-300' : 'text-red-300'}>
+        {p.lift >= 0 ? '+' : '−'}
+        {fmtNumber(Math.abs(p.lift) * 100, 1)}
+      </span>
+    </span>
+  )
+}
+
+/**
+ * ARAM Mayhem : augments conseillés pour ce champion, par rareté (le jeu propose trois augments
+ * d'une même rareté à chaque palier). Édition publique : avant la partie seulement.
+ */
+function AugmentCard({ t, inGame }: { t: TactiqueState; inGame: boolean }): ReactElement | null {
+  const mode = isMode(t.role) ? MODES[t.role] : null
+  if (!mode || !(t.catalog.features?.augments ?? mode.augments)) return null
+  if (inGame && RIOT_COMPLIANT) return null
+  const advice = augmentAdvice(t.catalog, t.genericBuild ? null : t.build)
+  return (
+    <Card
+      title={tr('Augments conseillés', 'Suggested augments')}
+      right={
+        advice?.games ? (
+          <span className="text-[10px] text-slate-400">
+            {fmtNumber(advice.games)} {tr('parties', 'games')}
+          </span>
+        ) : undefined
+      }
+    >
+      {!advice ? (
+        <p className="text-[11px] text-slate-400">
+          {tr(
+            'Pas encore assez de parties collectées pour classer les augments.',
+            'Not enough collected games yet to rank augments.'
+          )}
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {RARITY_ORDER.map((r) => {
+            const { best, avoid } = advice.byRarity[r]
+            if (!best.length && !avoid.length) return null
+            return (
+              <div key={r}>
+                <div className={`mb-1 text-[10px] uppercase tracking-wider ${RARITY_TONE[r]}`}>
+                  {tr(...RARITY_LABEL[r])}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {best.map((p) => (
+                    <AugmentChip key={p.info.id} p={p} />
+                  ))}
+                </div>
+                {avoid.length > 0 && (
+                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                    <span className="text-[9px] text-slate-500">{tr('À éviter', 'Avoid')}</span>
+                    {avoid.map((p) => (
+                      <AugmentChip key={p.info.id} p={p} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          <p className="text-[9px] leading-snug text-slate-500">
+            {tr(
+              'Écart de victoire des joueurs qui l’ont pris avec ce champion, par rapport aux autres augments (lissé).',
+              'Win-rate gap of players who took it with this champion, versus other augments (smoothed).'
+            )}
+          </p>
+        </div>
+      )}
+    </Card>
+  )
 }
 
 /** Famille de build suivie (quand le champion en a plusieurs en Master+) et les autres choix. */
@@ -343,6 +451,8 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
 
   const v = gd.version
   const inGame = live !== null
+  const modeInfo = isMode(t.role) ? MODES[t.role] : null
+  const runesOff = !!modeInfo && !(t.catalog.features?.runes ?? modeInfo.runes)
 
   // Champion seulement survolé : avis sur ce choix dans la draft et autres choix possibles. La fiche
   // (runes, objets) s'affiche au verrouillage ; la page de runes est quand même préparée.
@@ -377,7 +487,9 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
             {build.games && !t.genericBuild && (
               <Chip tone="green">
                 {fmtNumber(build.games)}{' '}
-                {tr(`parties ${levelName(build.bracket)}`, `${levelName(build.bracket)} games`)}
+                {isMode(t.role)
+                  ? tr(`parties ${roleLabel(t.role)}`, `${roleLabel(t.role)} games`)
+                  : tr(`parties ${levelName(build.bracket)}`, `${levelName(build.bracket)} games`)}
                 {build.winRate ? ` · ${fmtPct(build.winRate, 1)} ${tr('V', 'WR')}` : ''}
                 {build.patch ? ` · patch ${build.patch}` : ''}
               </Chip>
@@ -393,6 +505,9 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
           </div>
         </div>
       </div>
+
+      {/* Modes tirés au hasard : banc et relance jusqu'à la fin de la sélection. */}
+      {!inGame && t.phase === 'ChampSelect' && t.advice?.mode && <AdviceCard t={t} />}
 
       <VariantCard t={t} />
       <ChoiceNotes t={t} />
@@ -457,8 +572,19 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
 
       {inGame && <CoachCard t={t} inGame />}
 
+      <AugmentCard t={t} inGame={inGame} />
+
       {/* Runes */}
-      {runePage ? (
+      {runesOff ? (
+        <Card title="Runes">
+          <p className="text-[11px] text-slate-400">
+            {tr(
+              `Pas de runes en ${roleLabel(t.role)} : les augments les remplacent.`,
+              `No runes in ${roleLabel(t.role)}: augments replace them.`
+            )}
+          </p>
+        </Card>
+      ) : runePage ? (
         <Card
           title="Runes"
           right={

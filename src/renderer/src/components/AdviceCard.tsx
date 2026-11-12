@@ -18,7 +18,9 @@ import {
   type PickVerdict
 } from '../engine/draftAdvice'
 import { levelName } from '../engine/metaLevel'
-import { roleLabel } from '../engine/role'
+import { isMode, roleLabel } from '../engine/role'
+import { MODES } from '../../../shared/modes'
+import { RIOT_COMPLIANT } from '../../../shared/edition'
 import { champIcon } from '../engine/gameData'
 import { Card, Chip } from './ui'
 import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
@@ -282,7 +284,9 @@ export function PickVerdictCard({ t }: { t: TactiqueState }): ReactElement | nul
     verdict.total === 0
       ? { ...VERDICT.unknown, label: ['Pas encore de données', 'No data yet'] as [string, string] }
       : VERDICT[level]
-  const source = `${roleLabel(t.role)} · ${levelName(t.catalog.statsBracket)}`
+  const source = isMode(t.role)
+    ? roleLabel(t.role)
+    : `${roleLabel(t.role)} · ${levelName(t.catalog.statsBracket)}`
   return (
     <section className={`rounded-lg border p-3 ${style.tone}`}>
       <div className="flex items-center gap-3">
@@ -383,12 +387,124 @@ export function PickVerdictCard({ t }: { t: TactiqueState }): ReactElement | nul
   )
 }
 
+/**
+ * Modes tirés au hasard (ARAM…) : ton champion, ceux du banc et la relance, classés selon ce
+ * mode et tes alliés (les adversaires ne sont pas connus pendant la sélection).
+ */
+function BenchCard({ t }: { t: TactiqueState }): ReactElement | null {
+  const { advice, gd } = t
+  const [busy, setBusy] = useState<number | 'reroll' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  if (!advice || !gd) return null
+  const v = gd.version
+  const current = advice.ranking.find((p) => p.current) ?? null
+  const best = advice.ranking[0] ?? null
+  const act = (what: number | 'reroll'): void => {
+    setBusy(what)
+    setError(null)
+    const call = what === 'reroll' ? window.api.reroll() : window.api.swapWithBench(what)
+    void call
+      .then((res) => {
+        if (!res.success) setError(res.error ?? '?')
+      })
+      .finally(() => setBusy(null))
+  }
+  const better = best && current && best !== current && best.score - current.score >= 0.005
+  const reroll = advice.reroll
+  return (
+    <Card
+      title={tr('Ton champion et le banc', 'Your champion and the bench')}
+      right={<span className="text-[10px] text-slate-400">{roleLabel(t.role)}</span>}
+    >
+      <p className="mb-2 text-[10px] leading-snug text-slate-500">
+        {better
+          ? tr(
+              `${best.champ.label} est sur le banc : ${pts(best.score - current.score)} pt par rapport à ${current.champ.label} avec ces alliés.`,
+              `${best.champ.label} is on the bench: ${pts(best.score - current.score)} pt over ${current.champ.label} with these allies.`
+            )
+          : tr(
+              'Classés selon ce mode, tes alliés et ta maîtrise (les adversaires ne sont pas connus pendant la sélection).',
+              'Ranked for this mode, your allies and your mastery (enemies are not known during champ select).'
+            )}
+      </p>
+      <ul className="flex flex-col gap-2">
+        {advice.ranking.map((p) => (
+          <li
+            key={p.champ.key}
+            className={`flex items-start gap-2 ${p.current ? 'rounded bg-lolblue/10 p-1 ring-1 ring-lolblue/40' : ''}`}
+          >
+            <img
+              src={champIcon(v, p.champ.id)}
+              alt=""
+              className="mt-0.5 h-8 w-8 shrink-0 rounded-full border border-lolblue/60"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="truncate text-xs font-semibold text-slate-100">
+                  {p.champ.label}
+                </span>
+                <span className="shrink-0 rounded bg-white/5 px-1 text-[9px] text-slate-400">
+                  {p.current ? tr('ton champion', 'your champion') : tr('banc', 'bench')}
+                </span>
+              </div>
+              <div className="line-clamp-2 text-[10px] leading-snug text-slate-400">
+                {p.reasons.join(' · ')}
+              </div>
+              <FactorChips factors={p.factors} enemyJungler={null} />
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              <WinRate p={p} />
+              {p.bench && !RIOT_COMPLIANT && (
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => act(p.champ.key)}
+                  className="rounded bg-lolblue/20 px-1.5 py-0.5 text-[10px] text-lolblue hover:bg-lolblue/30 disabled:opacity-50"
+                >
+                  {busy === p.champ.key ? '…' : tr('Prendre', 'Take')}
+                </button>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {reroll && (
+        <div className="mt-2 flex items-center gap-2 border-t border-white/5 pt-2 text-[11px]">
+          <span className="flex-1 text-slate-300">
+            {tr(
+              `Relance (${t.draft.rerolls} restante${t.draft.rerolls > 1 ? 's' : ''}) : ${pct(reroll.winRate)} en moyenne, ${pts(reroll.gain)} pt`,
+              `Reroll (${t.draft.rerolls} left): ${pct(reroll.winRate)} on average, ${pts(reroll.gain)} pt`
+            )}
+            {reroll.gain >= 0.01
+              ? tr(' : à tenter.', ': worth it.')
+              : reroll.gain <= -0.005
+                ? tr(' : garde ton champion.', ': keep your champion.')
+                : ''}
+          </span>
+          {!RIOT_COMPLIANT && (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => act('reroll')}
+              className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-slate-200 hover:bg-white/20 disabled:opacity-50"
+            >
+              {busy === 'reroll' ? '…' : tr('Relancer', 'Reroll')}
+            </button>
+          )}
+        </div>
+      )}
+      {error && <p className="mt-2 text-[10px] text-red-300">{error}</p>}
+    </Card>
+  )
+}
+
 /** Conseils de pick et de ban pendant la sélection des champions. */
 export function AdviceCard({ t }: { t: TactiqueState }): ReactElement | null {
   const { advice, gd, draft } = t
   const [allBans, setAllBans] = useState(false)
   const [allPicks, setAllPicks] = useState(false)
   const [filter, setFilter] = useState('')
+  if (advice?.mode && MODES[advice.mode].allRandom) return <BenchCard t={t} />
   if (!advice || !gd) return null
   const showBans = draft.banTurn || draft.timerPhase === 'PLANNING'
   const v = gd.version
@@ -414,6 +530,17 @@ export function AdviceCard({ t }: { t: TactiqueState }): ReactElement | null {
             ) : undefined
           }
         >
+          <p className="mb-2 text-[10px] leading-snug text-slate-500">
+            {advice.myPick
+              ? tr(
+                  `Calculés pour ${advice.myPick.champ.label} : ce qui le bat le plus, et ce que tu croises le plus souvent à ton poste. Les équipes ne sont pas encore connues au moment des bans.`,
+                  `Computed for ${advice.myPick.champ.label}: what beats it most, and what you meet most often in your role. Teams are not known yet when bans happen.`
+                )
+              : tr(
+                  'Survole ton champion pour des bans faits pour lui. Les équipes ne sont pas encore connues au moment des bans : ils dépendent de ton poste et de tes champions.',
+                  'Hover your champion to get bans made for it. Teams are not known yet when bans happen: they depend on your role and your champions.'
+                )}
+          </p>
           <ul className="flex flex-col gap-2">
             {(allBans ? advice.banRanking.slice(0, 15) : advice.bans).map((b) => (
               <BanRow key={b.champ.id} b={b} v={v} />

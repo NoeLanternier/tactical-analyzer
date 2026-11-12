@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SETTINGS,
   EMPTY_DRAFT,
+  NO_QUEUE,
   type DraftState,
+  type GameQueue,
   type GamePhase,
   type LcuStatus,
   type LiveGameData,
@@ -51,9 +53,12 @@ import { liveNudges, type Nudge } from '../engine/learning'
 import { DEFAULT_BENCH_BY_ROLE } from '../engine/postgame'
 import { useReview, type ReviewState } from './useReview'
 import { useRemoteMeta } from './useRemoteMeta'
+import { MODES, modeOf, type ModeKey } from '../../../shared/modes'
 import {
   clientPosition,
   detectRole,
+  isMode,
+  mapOf,
   readRole,
   roleLabel,
   roleMetaUrl,
@@ -120,8 +125,10 @@ export interface TactiqueState {
   currentGold: number
   runeSync: SyncState
   itemSetSync: SyncState
-  /** Poste joué (réglage, poste attribué en sélection ou détecté en partie). */
+  /** Poste joué (réglage, poste attribué en sélection ou détecté en partie), ou mode de jeu. */
   role: Role
+  /** Mode de la partie : 'sr' (Faille), un mode pris en charge, ou null (mode non pris en charge). */
+  mode: ModeKey | 'sr' | null
   /** Conseils de pick et de ban (pendant la sélection, avant le verrouillage). */
   advice: DraftAdvice | null
   /** Bilans d'après-partie et apprentissage. */
@@ -151,6 +158,7 @@ export function useTactique(): TactiqueState {
   const [phase, setPhase] = useState<GamePhase>('None')
   const [draft, setDraft] = useState<DraftState>(EMPTY_DRAFT)
   const [live, setLive] = useState<LiveGameData | null>(null)
+  const [queue, setQueue] = useState<GameQueue>(NO_QUEUE)
   const [riot, setRiot] = useState<{ key: number; pages: RecommendedRunePage[] }>({
     key: 0,
     pages: []
@@ -208,13 +216,15 @@ export function useTactique(): TactiqueState {
       setLcuStatus(s.status)
       onPhase(s.phase)
       setDraft(s.draft)
+      if (s.queue) setQueue(s.queue)
     })
     const offs = [
       api.onLcuStatus(setLcuStatus),
       api.onPhaseUpdate(onPhase),
       api.onDraftUpdate(setDraft),
       api.onLiveUpdate(setLive),
-      api.onLangUpdate(onLang)
+      api.onLangUpdate(onLang),
+      api.onQueueUpdate(setQueue)
     ]
     return () => offs.forEach((off) => off())
   }, [])
@@ -235,15 +245,29 @@ export function useTactique(): TactiqueState {
   }, [lcuStatus, phase])
   const metaLevel = metaLevelFor(settings.metaLevel, tier)
 
-  // Poste joué : chaque poste a sa méta (builds, draft, repères).
+  // Mode de la partie : file lue dans le client, sinon mode et carte de l'API en jeu.
+  const liveMode = live?.gameMode ?? ''
+  const liveMap = live?.mapNumber ?? 0
+  const mode = useMemo(
+    () =>
+      queue.queueId || queue.gameMode
+        ? modeOf(queue.queueId, queue.gameMode, queue.mapId)
+        : liveMode
+          ? modeOf(0, liveMode, liveMap)
+          : 'sr',
+    [queue, liveMode, liveMap]
+  )
+  // Poste joué : chaque poste (et chaque mode) a sa méta (builds, draft, repères).
   const liveMe = useMemo(() => (gd ? findMe(gd, live, null) : null), [gd, live])
   const role = detectRole({
     setting: settings.role,
     assigned: draft.position,
     live: liveMe?.position || null,
     hasSmite: draft.hasSmite,
-    last: readRole()
+    last: readRole(),
+    mode
   })
+  const modeInfo = isMode(role) ? MODES[role] : null
   useEffect(() => saveRole(role), [role])
   const jungle = role === 'jungle'
 
@@ -259,12 +283,19 @@ export function useTactique(): TactiqueState {
     return goldReady && gold ? mergeOverride(base, gold.data).catalog : base
   }, [master, gold, goldReady, jungle])
   // Méta vieille de plus de 2 jours : la collecte nocturne a sans doute échoué.
+  // (modes temporaires : la méta date de leur dernière présence, c'est normal.)
+  const temporary = !!modeInfo?.temporary
   const metaStaleDays = useMemo(() => {
     const age = metaAgeDays((goldReady ? gold : master)?.info?.generatedAt)
-    return age !== null && age > 2 ? Math.floor(age) : null
-  }, [master, gold, goldReady])
+    return age !== null && age > 2 && !temporary ? Math.floor(age) : null
+  }, [master, gold, goldReady, temporary])
   const catalogNote = useMemo(() => {
     if (!master) return null
+    if (isMode(role) && (master.error || !master.catalog || !master.info))
+      return tr(
+        `${roleLabel(role)} — méta de ce mode pas encore disponible (${master.error ?? '?'}) : builds génériques en attendant la prochaine collecte.`,
+        `${roleLabel(role)} — no meta for this mode yet (${master.error ?? '?'}): generic builds until the next collection.`
+      )
     if (master.error || !master.catalog || !master.info)
       return tr(
         `URL de méta inaccessible (${master.error}) : base intégrée utilisée.`,
@@ -282,7 +313,7 @@ export function useTactique(): TactiqueState {
         )
       : ''
     const levelNote =
-      metaLevel !== 'gold'
+      metaLevel !== 'gold' || isMode(role)
         ? ''
         : goldReady && gold?.info
           ? tr(
@@ -383,7 +414,7 @@ export function useTactique(): TactiqueState {
     if (!champKey || lcuStatus !== 'connected' || riot.key === champKey) return
     const timer = setTimeout(() => {
       void window.api
-        .getRecommendedRunes(champKey, draft.position || clientPosition(role))
+        .getRecommendedRunes(champKey, draft.position || clientPosition(role), mapOf(role))
         .then((pages) => setRiot({ key: champKey, pages }))
         .catch(() => setRiot({ key: champKey, pages: [] }))
     }, 300)
@@ -440,7 +471,8 @@ export function useTactique(): TactiqueState {
   // Adversaire direct : en partie, l'adversaire au même poste (quand le jeu le donne) ; sinon celui
   // qui joue le plus souvent ce poste parmi les adversaires visibles.
   const enemyJungler = useMemo(() => {
-    if (!threat || !gd) return null
+    // Modes sans voie : pas d'adversaire direct.
+    if (!threat || !gd || isMode(role)) return null
     const myPos = liveMe?.position
     if (live && myPos && liveMe) {
       const foe = live.allPlayers.find((p) => p.team !== liveMe.team && p.position === myPos)
@@ -451,7 +483,7 @@ export function useTactique(): TactiqueState {
       catalog,
       threat.enemies.map((e) => e.champ)
     )
-  }, [catalog, threat, gd, live, liveMe])
+  }, [catalog, threat, gd, live, liveMe, role])
   const adapted = useMemo(() => {
     const b = variant?.build ?? baseBuild
     if (!b) return null
@@ -479,8 +511,10 @@ export function useTactique(): TactiqueState {
   )
   const currentGold = live?.activePlayer?.currentGold ?? 0
 
+  // Runes désactivées dans certains modes (ARAM Mayhem) : constaté sur les parties collectées.
+  const runesEnabled = !modeInfo || (catalog.features?.runes ?? modeInfo.runes)
   const runePage = useMemo(() => {
-    if (!gd || !champ || !threat) return null
+    if (!gd || !champ || !threat || !runesEnabled) return null
     const pages = riot.key === champ.key ? riot.pages : []
     // Chaque build porte son propre patch : un build d'un ancien patch laisse la place aux runes Riot.
     const buildPatch = build?.patch ?? META_PATCH
@@ -493,7 +527,7 @@ export function useTactique(): TactiqueState {
       settings.runeSource,
       threat
     )
-  }, [gd, champ, threat, riot, genericBuild, build, settings.runeSource])
+  }, [gd, champ, threat, riot, genericBuild, build, settings.runeSource, runesEnabled])
 
   const review = useReview(
     gd,
@@ -518,19 +552,34 @@ export function useTactique(): TactiqueState {
     return m
   }, [review.reports, role])
 
+  // Modes tirés au hasard (ARAM…) : le champion est attribué d'emblée, mais le banc et les
+  // relances restent possibles jusqu'à la fin de la sélection.
+  const allRandom = !!modeInfo?.allRandom
   const advice = useMemo(
     () =>
-      gd && phase === 'ChampSelect' && !draft.isLocked
+      gd && phase === 'ChampSelect' && (!draft.isLocked || allRandom)
         ? computeDraftAdvice(
             gd,
             catalog,
             draft,
             pool,
-            settings.personalLearning ? personalRecord : null
+            settings.personalLearning ? personalRecord : null,
+            role
           )
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
-    [gd, phase, draft, catalog, pool, personalRecord, settings.personalLearning, lang]
+    [
+      gd,
+      phase,
+      draft,
+      catalog,
+      pool,
+      personalRecord,
+      settings.personalLearning,
+      lang,
+      role,
+      allRandom
+    ]
   )
   // Journal de draft : ton champion au moment du verrouillage et son rang dans le classement de
   // l'app (comparé ensuite à tes résultats, onglet Bilan).
@@ -540,7 +589,8 @@ export function useTactique(): TactiqueState {
     if (advice) lastAdvice.current = advice
   }, [advice])
   useEffect(() => {
-    const locked = phase === 'ChampSelect' && draft.isLocked
+    // (modes tirés au hasard : pas de choix à juger, le champion est attribué.)
+    const locked = phase === 'ChampSelect' && draft.isLocked && !allRandom
     if (locked && !wasLocked.current) {
       const a = lastAdvice.current
       const mine = a?.myPick
@@ -557,7 +607,7 @@ export function useTactique(): TactiqueState {
     }
     wasLocked.current = locked
     if (phase !== 'ChampSelect') lastAdvice.current = null
-  }, [phase, draft.isLocked, draft.localChampId])
+  }, [phase, draft.isLocked, draft.localChampId, allRandom])
   const personal = useMemo(
     () =>
       settings.personalLearning && review.learning.games > 0
@@ -634,7 +684,7 @@ export function useTactique(): TactiqueState {
     if (!settings.autoItemSet || phase !== 'ChampSelect' || !draft.isLocked || !plan || !champ)
       return
     if (lcuStatus !== 'connected' || appliedItemSet.current === itemSetKey) return
-    const payload = toItemSet(champ.key, champ.label, plan)
+    const payload = toItemSet(champ.key, champ.label, plan, mapOf(role))
     const timer = setTimeout(() => {
       setItemSetState({ key: itemSetKey, sync: { state: 'pending' } })
       void window.api.applyItemSet(payload).then((res) => {
@@ -698,6 +748,7 @@ export function useTactique(): TactiqueState {
     runeSync,
     itemSetSync,
     role,
+    mode,
     advice,
     review,
     nudges,

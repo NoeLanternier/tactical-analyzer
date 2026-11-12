@@ -7,6 +7,8 @@ import type { SituationContext } from '../data/junglers'
 import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
 import { tw } from './tuning'
 import { DEFAULT_PRIORS, clamp, logit, shrunk as bayes, sigmoid } from './stats'
+import { isMode, type Role } from './role'
+import { MODES, type ModeKey } from '../../../shared/modes'
 
 // Conseils de pick et de ban pour le poste joué, à partir des statistiques du patch :
 // - taux de victoire de chaque champion à ce poste ;
@@ -55,6 +57,9 @@ export interface PickAdvice {
   pickRate: number
   /** Rang dans le classement complet (1 = meilleur). */
   rank: number
+  /** Modes tirés au hasard : champion sur le banc (à prendre), ou ton champion actuel. */
+  bench?: boolean
+  current?: boolean
 }
 
 export interface BanAdvice {
@@ -83,6 +88,13 @@ export interface DraftAdvice {
   enemyJungler: ChampInfo | null
   /** Nombre d'alliés (sur 4) et d'adversaires (sur 5) déjà choisis. */
   known: { allies: number; enemies: number }
+  /** Mode de la partie (null : Faille de l'invocateur). */
+  mode: ModeKey | null
+  /**
+   * Modes tirés au hasard : ce que vaut une relance en moyenne (champion tiré parmi les tiens), et
+   * le gain par rapport à ton champion actuel (null : pas de relance possible).
+   */
+  reroll: { winRate: number; gain: number } | null
 }
 
 /** Résultats du joueur par champion (bilans d'après-partie). */
@@ -122,8 +134,10 @@ const PERSONAL_K = 120
 const LOW_DATA_GAMES = 200
 /** Effet maximal de la composition adverse (toute l'équipe connue), en points. */
 const COMP_CAP = 0.025
-/** Effet cumulé maximal des alliés et adversaires, en log-odds (≈ ±6 points). */
-const PAIR_CAP = 0.25
+/** Effet cumulé maximal des alliés et adversaires, en points de taux de victoire. */
+const PAIR_CAP = 0.06
+/** Effet maximal de l'équilibre de l'équipe (dégâts, ligne de front), en points. */
+const FIT_CAP = 0.02
 /** Part de la valeur d'un ban hors de ton poste (un coéquipier aurait pu prendre ce champion). */
 const OTHER_ROLE_BAN = 0.25
 /** Part des parties où l'adversaire choisit un contre quand on se dévoile tôt. */
@@ -158,15 +172,23 @@ export function findEnemyJungler(catalog: Catalog, enemies: ChampInfo[]): ChampI
 interface PairEffect {
   champ: ChampInfo
   ally: boolean
-  /** Écart propre à ce jungler (lissé, en log-odds), effet général du champion retiré. */
+  /** Écart propre à ce champion (lissé, en points), effet général du partenaire retiré. */
   delta: number
   games: number
 }
 
-/** Effet d'une paire [parties, taux] sur le taux du jungler, en log-odds. */
-function pairDelta(pair: [number, number] | undefined, base: number, k: number): number {
+/**
+ * Écart propre d'une paire [parties, taux] : ce qui reste du taux observé une fois retirés le
+ * niveau du champion et l'effet général du partenaire, lissé selon le nombre de parties (points).
+ */
+function interaction(
+  pair: [number, number] | undefined,
+  base: number,
+  general: number,
+  k: number
+): number {
   if (!pair) return 0
-  return logit(bayes(pair[0], pair[1], base, k)) - logit(base)
+  return (pair[0] / (pair[0] + k)) * (pair[1] - base - general)
 }
 
 export function computeDraftAdvice(
@@ -174,9 +196,13 @@ export function computeDraftAdvice(
   catalog: Catalog,
   draft: DraftState,
   pool: ChampionPool | null,
-  personal: PersonalRecord | null = null
+  personal: PersonalRecord | null = null,
+  /** Poste ou mode joué (modes : pas de voie, et champions tirés au hasard en ARAM). */
+  role: Role | null = null
 ): DraftAdvice {
   const stats = catalog.junglerStats ?? {}
+  const mode = isMode(role) ? role : null
+  const allRandom = !!mode && MODES[mode].allRandom
   const taken = new Set([...draft.allyIds, ...draft.enemyIds, ...draft.bannedIds])
   const owned = new Set(pool?.owned ?? [])
   const masteryOf = new Map((pool?.mastery ?? []).map((m) => [m.championId, m.points]))
@@ -194,7 +220,8 @@ export function computeDraftAdvice(
     ids.map((k) => gd.champions.get(k)).filter((c): c is ChampInfo => !!c)
   const enemies = toChamps(draft.enemyIds)
   const allies = toChamps(draft.allyIds)
-  const enemyJungler = findEnemyJungler(catalog, enemies)
+  // Modes : pas d'adversaire direct (pas de voie).
+  const enemyJungler = mode ? null : findEnemyJungler(catalog, enemies)
   const otherEnemies = enemies.filter((c) => c !== enemyJungler)
 
   // Équilibre de dégâts et ligne de front de l'équipe alliée.
@@ -203,38 +230,50 @@ export function computeDraftAdvice(
     ? allyProfiles.reduce((s, p) => s + p.ap, 0) / allyProfiles.length
     : 0.5
   const allyFront = allyProfiles.reduce((s, p) => s + p.tank, 0)
+  // Profils mesurés bruts (part de dégâts magiques, rang de résistance…), tels que publiés.
+  const measuredOf = (c: ChampInfo): { ap: number; tank: number } | null => {
+    const m = catalog.profiles?.[c.id]
+    return m && m.games >= 30 ? m : null
+  }
+  const allyMeasured = allies.map(measuredOf).filter((m): m is NonNullable<typeof m> => !!m)
 
   // Junglers adverses encore possibles (ni choisis ni bannis), avec leur fréquence.
   const openEnemyJunglers =
-    enemyJungler || enemies.length >= 5
+    mode || enemyJungler || enemies.length >= 5
       ? []
       : junglers.filter((c) => !taken.has(c.key) && (stats[c.id]?.games ?? 0) >= 150)
 
-  // Effet « général » d'un allié ou d'un adversaire, commun à tous les junglers (un champion fort
-  // fait gagner son équipe quel que soit le jungler) : il est retiré pour ne garder que l'effet
-  // propre à chaque jungler (synergie, affrontement).
+  // Effet « général » d'un allié ou d'un adversaire, commun à tous les champions du poste (un
+  // champion fort fait gagner son équipe et perdre ses adversaires, quel que soit ton pick) : il
+  // ne distingue aucun pick. On le retire pour ne garder que l'écart propre à chaque champion
+  // (synergie, affrontement) : c'est le seul qui se retrouve sur les parties suivantes.
   const prior = shrinkPrior(stats)
   const P = catalog.priors ?? DEFAULT_PRIORS
   const baseOf = (j: JunglerStat): number => bayes(j.games, j.winRate, prior.mean, prior.k)
-  const generalEffect = (champ: ChampInfo, side: 'with' | 'against'): number => {
+  const generalCache = new Map<string, number>()
+  const general = (champ: ChampInfo, side: 'vs' | 'with' | 'against'): number => {
+    const key = `${side}:${champ.id}`
+    const cached = generalCache.get(key)
+    if (cached !== undefined) return cached
     let weight = 0
     let sum = 0
     for (const j of Object.values(stats)) {
       const pair = j[side][champ.id]
       if (!pair) continue
       weight += pair[0]
-      sum += pair[0] * pairDelta(pair, baseOf(j), P.pair)
+      sum += pair[0] * (pair[1] - baseOf(j))
     }
-    return weight > 0 ? sum / weight : 0
+    const value = weight > 0 ? sum / weight : 0
+    generalCache.set(key, value)
+    return value
   }
-  const general = new Map<string, number>()
-  for (const a of allies) general.set(`with:${a.id}`, generalEffect(a, 'with'))
-  for (const e of otherEnemies) general.set(`against:${e.id}`, generalEffect(e, 'against'))
 
-  // Pool du joueur : ses junglers les plus maîtrisés.
-  const playable = junglers.filter(
-    (c) => (owned.size === 0 || owned.has(c.key)) && !taken.has(c.key)
-  )
+  // Pool du joueur : ses junglers les plus maîtrisés. Modes tirés au hasard : seulement ton
+  // champion et ceux du banc (on peut les prendre sans les posséder).
+  const options = new Set(allRandom ? [draft.localChampId, ...draft.benchIds] : [])
+  const playable = allRandom
+    ? [...options].map((k) => gd.champions.get(k)).filter((c): c is ChampInfo => !!c)
+    : junglers.filter((c) => (owned.size === 0 || owned.has(c.key)) && !taken.has(c.key))
   const byMastery = junglers
     .filter((c) => (masteryOf.get(c.key) ?? 0) > 0)
     .sort((a, b) => (masteryOf.get(b.key) ?? 0) - (masteryOf.get(a.key) ?? 0))
@@ -258,9 +297,8 @@ export function computeDraftAdvice(
     for (const j of Object.values(stats)) {
       const cell = j.contexts?.[ctx]
       if (!cell) continue
-      const base = baseOf(j)
       w += cell[0]
-      sum += cell[0] * (bayes(cell[0], cell[1], base, P.comp) - base)
+      sum += cell[0] * (cell[1] - baseOf(j))
     }
     ctxMean[ctx] = w > 0 ? sum / w : 0
   }
@@ -271,7 +309,7 @@ export function computeDraftAdvice(
     for (const [ctx, w] of Object.entries(ctxWeights) as [SituationContext, number][]) {
       const cell = s.contexts?.[ctx]
       if (!cell || w <= 0) continue
-      const own = bayes(cell[0], cell[1], base, P.comp) - base - (ctxMean[ctx] ?? 0)
+      const own = interaction(cell, base, ctxMean[ctx] ?? 0, P.comp)
       sum += w * own
       weightSum += w
       const label = CONTEXT_LABEL[ctx]
@@ -284,8 +322,8 @@ export function computeDraftAdvice(
   }
 
   // Risque d'être contré quand l'adversaire direct n'est pas encore choisi : perte moyenne face à
-  // ses trois pires affrontements connus, et part des adversaires possibles dont l'affrontement est
-  // connu. Un champion peu joué n'a presque aucun affrontement mesuré : il prend le risque moyen du
+  // ses trois pires affrontements connus (écart propre au champion), et part des adversaires
+  // possibles dont l'affrontement est connu. Un champion peu joué n'a presque aucun affrontement mesuré : il prend le risque moyen du
   // poste plutôt qu'aucun risque.
   const blindOf = (
     c: ChampInfo,
@@ -296,7 +334,7 @@ export function computeDraftAdvice(
     const known = s
       ? openEnemyJunglers
           .filter((e) => e.id !== c.id && (s.vs[e.id]?.[0] ?? 0) >= 15)
-          .map((e) => ({ e, wr: bayes(s.vs[e.id][0], s.vs[e.id][1], base, P.vs) }))
+          .map((e) => ({ e, wr: base + interaction(s.vs[e.id], base, general(e, 'vs'), P.vs) }))
       : []
     const coverage =
       known.reduce((t, x) => t + (stats[x.e.id]?.games ?? 0), 0) /
@@ -348,19 +386,21 @@ export function computeDraftAdvice(
         : tr('pas de statistiques ce patch', 'no stats this patch')
     )
 
-    // Jungler adverse connu : affrontement direct.
+    // Adversaire direct connu : écart propre à ce champion face à lui (sa force générale, la même
+    // pour tous les picks, n'entre pas dans le classement).
     if (s && enemyJungler && s.vs[enemyJungler.id]) {
       const [g, vsWr] = s.vs[enemyJungler.id]
       const before = sigmoid(z)
-      z += tw(catalog.tuning, 'vs') * pairDelta(s.vs[enemyJungler.id], base, P.vs)
+      const own = interaction(s.vs[enemyJungler.id], base, general(enemyJungler, 'vs'), P.vs)
+      z = logit(clamp(before + tw(catalog.tuning, 'vs') * own, 0.05, 0.95))
       factor('vs')
       // L'effet retenu (lissé) et le taux observé qui le fonde.
       const effect = sigmoid(z) - before
       if (g >= 20 && Math.abs(effect) >= 0.003)
         reasons.push(
           tr(
-            `contre ${enemyJungler.label} : ${pts(effect)} pt (${pct(vsWr)} sur ${g} parties)`,
-            `vs ${enemyJungler.label}: ${pts(effect)} pt (${pct(vsWr)} over ${g} games)`
+            `contre ${enemyJungler.label} : ${pts(effect)} pt par rapport aux autres champions (${pct(vsWr)} sur ${g} parties)`,
+            `vs ${enemyJungler.label}: ${pts(effect)} pt relative to other champions (${pct(vsWr)} over ${g} games)`
           )
         )
     }
@@ -372,7 +412,7 @@ export function computeDraftAdvice(
       const effect = (champ: ChampInfo, side: 'with' | 'against'): void => {
         const pair = s[side][champ.id]
         if (!pair) return
-        const delta = pairDelta(pair, base, P.pair) - (general.get(`${side}:${champ.id}`) ?? 0)
+        const delta = interaction(pair, base, general(champ, side), P[side])
         effects.push({ champ, ally: side === 'with', delta, games: pair[0] })
       }
       for (const a of allies) effect(a, 'with')
@@ -382,13 +422,13 @@ export function computeDraftAdvice(
       // Effet cumulé plafonné, réparti entre alliés et adversaires.
       const sum = withSum + againstSum
       const capped = clamp(sum, -PAIR_CAP, PAIR_CAP)
-      const scale = sum !== 0 ? capped / sum : 0
-      z += tw(catalog.tuning, 'pairs') * withSum * scale
+      const scale = (sum !== 0 ? capped / sum : 0) * tw(catalog.tuning, 'pairs')
+      z = logit(clamp(sigmoid(z) + withSum * scale, 0.05, 0.95))
       factor('allies')
-      z += tw(catalog.tuning, 'pairs') * againstSum * scale
+      z = logit(clamp(sigmoid(z) + againstSum * scale, 0.05, 0.95))
       factor('enemies')
       const notable = effects
-        .map((x) => ({ ...x, points: sigmoid(logit(base) + x.delta) - base }))
+        .map((x) => ({ ...x, points: x.delta }))
         .filter((x) => x.games >= 30 && Math.abs(x.points) >= 0.005)
         .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
         .slice(0, 3)
@@ -449,7 +489,36 @@ export function computeDraftAdvice(
     // Composition de l'équipe (dégâts, ligne de front).
     let fit = 0
     const p = profileOf(c, catalog.profiles)
-    if (allies.length >= 2) {
+    const F = catalog.fit
+    if (F) {
+      // Mesuré par la collecte sur les paires d'alliés : ressembler à ses alliés coûte (une équipe
+      // tout magique ou tout physique, une deuxième ligne de front), les compléter rapporte.
+      // (profils mesurés bruts, ceux sur lesquels la collecte a mesuré l'effet.)
+      const mine = measuredOf(c)
+      let apPart = 0
+      let tankPart = 0
+      for (const a of mine ? allyMeasured : []) {
+        apPart += F.ap * (mine!.ap - F.center.ap[0]) * (a.ap - F.center.ap[1])
+        tankPart += F.tank * (mine!.tank - F.center.tank[0]) * (a.tank - F.center.tank[1])
+      }
+      fit = clamp(apPart + tankPart, -FIT_CAP, FIT_CAP)
+      const magic = !!mine && mine.ap >= F.center.ap[0]
+      if (apPart >= 0.005)
+        reasons.push(
+          magic
+            ? tr('apporte les dégâts magiques qui manquent', 'adds the missing magic damage')
+            : tr('apporte les dégâts physiques qui manquent', 'adds the missing physical damage')
+        )
+      else if (apPart <= -0.005)
+        reasons.push(
+          magic
+            ? tr('équipe déjà très magique', 'team already heavy on magic damage')
+            : tr('équipe déjà très physique', 'team already heavy on physical damage')
+        )
+      if (tankPart >= 0.004 && mine && mine.tank >= F.center.tank[0])
+        reasons.push(tr('ligne de front pour l’équipe', 'frontline for the team'))
+    } else if (allies.length >= 2) {
+      // Méta sans mesure de l'équilibre : règle générale.
       if (allyAp < 0.3 && p.ap >= 0.6) {
         fit += 0.012
         reasons.push(
@@ -527,14 +596,36 @@ export function computeDraftAdvice(
   // champions s'ils dépassent ton meilleur choix (jusqu'à 3).
   // (comparés sur le score, qui tient compte de ta maîtrise : un champion que tu ne joues pas doit
   // être nettement meilleur pour être proposé.)
+  if (allRandom)
+    for (const x of ranking) {
+      x.current = x.champ.key === draft.localChampId
+      x.bench = !x.current
+    }
   const fromPool = ranking.filter((x) => x.inPool).slice(0, 5)
   const bestMine = fromPool[0]?.score ?? 0
   const outside = ranking
     .filter((x) => !x.inPool && x.games >= 150 && x.score - bestMine >= 0.005)
     .slice(0, 3)
-  const picks = fromPool.length
-    ? [...fromPool, ...outside].sort((a, b) => b.score - a.score)
-    : ranking.slice(0, 8)
+  const picks = allRandom
+    ? ranking
+    : fromPool.length
+      ? [...fromPool, ...outside].sort((a, b) => b.score - a.score)
+      : ranking.slice(0, 8)
+
+  // Relance : un champion tiré parmi les tiens (possédés), en moyenne. Le champion actuel part
+  // alors sur le banc (un allié peut le prendre).
+  let reroll: DraftAdvice['reroll'] = null
+  if (allRandom && draft.rerolls > 0) {
+    const current = ranking.find((x) => x.current)
+    const drawable = junglers.filter(
+      (c) => (owned.size === 0 || owned.has(c.key)) && !taken.has(c.key) && !options.has(c.key)
+    )
+    if (current && drawable.length >= 10) {
+      const scores = drawable.map((c) => scorePick(c).score)
+      const mean = scores.reduce((t, x) => t + x, 0) / scores.length
+      reroll = { winRate: mean, gain: mean - current.score }
+    }
+  }
 
   // Bans. Bannir un champion le retire aux deux équipes : le ban ne rapporte que si l'adversaire
   // l'aurait pris et pas ton équipe. D'où :
@@ -586,8 +677,9 @@ export function computeDraftAdvice(
             mineStat?.vs[c.id] ?? (theirs ? [theirs[0], 1 - theirs[1]] : undefined)
           if (!cell) continue
           const mineBase = mineStat ? baseOf(mineStat) : prior.mean
-          // Ce que cet adversaire coûte à ton champion, au-delà de sa force habituelle.
-          const effect = mineBase - bayes(cell[0], cell[1], mineBase, P.vs) - strength
+          // Ce que cet adversaire coûte à ton champion, au-delà de sa force habituelle (écart
+          // propre à l'affrontement, lissé).
+          const effect = -interaction(cell, mineBase, general(c, 'vs'), P.vs)
           matchup += (weight / targetWeight) * effect
           if (cell[0] >= 20 && effect >= 0.004 && (!worst || effect > worst.effect))
             worst = { mine, effect, cell }
@@ -650,6 +742,8 @@ export function computeDraftAdvice(
     })
     .filter((b) => b.score > 0)
     .sort((a, b) => b.score - a.score)
+  // Modes tirés au hasard : pas de bannissement.
+  if (allRandom) banRanking.length = 0
   const bans = banRanking.slice(0, 5)
 
   return {
@@ -659,7 +753,9 @@ export function computeDraftAdvice(
     banRanking,
     myPick: myPick ? (ranking.find((x) => x.champ.key === myPick.key) ?? null) : null,
     enemyJungler,
-    known: { allies: Math.min(4, allies.length), enemies: Math.min(5, enemies.length) }
+    known: { allies: Math.min(4, allies.length), enemies: Math.min(5, enemies.length) },
+    mode,
+    reroll
   }
 }
 

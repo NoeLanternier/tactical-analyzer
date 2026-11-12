@@ -720,7 +720,13 @@ export function purchaseAlert(
 }
 
 /** Set d'items envoyé au client : il apparaît dans la boutique en jeu. */
-export function toItemSet(championId: number, champName: string, plan: ItemPlan): ItemSetPayload {
+export function toItemSet(
+  championId: number,
+  champName: string,
+  plan: ItemPlan,
+  /** Carte du set (11 Faille, 12 Abîme hurlant ; 0 : toutes). */
+  map = 11
+): ItemSetPayload {
   const block = (type: string, items: ItemInfo[]): ItemSetPayload['blocks'][number] => ({
     type,
     items: items.map((i) => ({ id: String(i.id), count: 1 }))
@@ -732,6 +738,7 @@ export function toItemSet(championId: number, champName: string, plan: ItemPlan)
   return {
     title: champName,
     championId,
+    map,
     blocks: [
       block(tr('Départ', 'Starting items'), plan.starter),
       block(tr('Cœur (ordre d’achat)', 'Core (buy order)'), core),

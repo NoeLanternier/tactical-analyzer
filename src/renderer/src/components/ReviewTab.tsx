@@ -15,7 +15,7 @@ import { categoryLabel, tipFor, type Category, type GameReport } from '../engine
 import { fmtNumber, fmtPct, getLang, tr } from '../../../shared/i18n'
 import type { Learning } from '../engine/learning'
 import { Card, Chip, ItemIcon, Meter } from './ui'
-import { roleLabel } from '../engine/role'
+import { isMode, roleLabel } from '../engine/role'
 import {
   BUILD_FOLLOWED,
   BUILD_IGNORED,
@@ -62,8 +62,8 @@ function Toolbar({ t }: { t: TactiqueState }): ReactElement {
           disabled={busy || !connected}
           onClick={() => t.review.importRecent(20)}
           title={tr(
-            'Analyse vos 20 dernières parties de l’historique (parties classiques sur la Faille, tous postes)',
-            'Analyzes your last 20 games from the history (Summoner’s Rift games, all roles)'
+            'Analyse vos 20 dernières parties de l’historique (Faille tous postes, ARAM, ARAM Mayhem et modes temporaires)',
+            'Analyzes your last 20 games from the history (Summoner’s Rift all roles, ARAM, ARAM: Mayhem and rotating modes)'
           )}
         >
           <History size={12} /> {tr('Importer 20 parties', 'Import 20 games')}
@@ -155,7 +155,7 @@ function ReportView({ r, version }: { r: GameReport; version: string }): ReactEl
           {cats.map(([c, v]) => (
             <Meter
               key={c}
-              label={categoryLabel(c)}
+              label={categoryLabel(c, r.role)}
               value={v / 100}
               tone={v < 45 ? 'red' : v < 60 ? 'orange' : 'blue'}
             />
@@ -273,78 +273,124 @@ function ReportView({ r, version }: { r: GameReport; version: string }): ReactEl
       )}
 
       <Card title={tr('Chiffres clés', 'Key stats')}>
-        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-          <Stat
-            label={tr('CS à 10 min', 'CS at 10 min')}
-            value={s.cs10 !== null ? String(s.cs10) : `${fr1(s.csPerMin)}/min`}
-            ref_={`${Math.round(r.bench.cs10)}`}
-          />
-          <Stat
-            label={tr('Or à 15 min', 'Gold at 15 min')}
-            value={
-              s.goldDiff15 !== null
-                ? `${s.goldDiff15 >= 0 ? '+' : ''}${fmtNumber(Math.round(s.goldDiff15))}`
-                : '—'
-            }
-            ref_={r.role === 'jungle' ? 'vs jungler' : tr('vs adversaire', 'vs opponent')}
-          />
-          <Stat
-            label={tr('Participation', 'Kill part.')}
-            value={fmtPct(s.kp)}
-            ref_={fmtPct(r.bench.kp)}
-          />
-          <Stat
-            label={tr('1er objet', '1st item')}
-            value={s.firstItemMin !== null ? `${fr1(s.firstItemMin)} min` : '—'}
-            ref_={`${fr1(r.bench.firstItem)}`}
-          />
-          <Stat label="Vision / min" value={fr1(s.visionPerMin)} ref_={fr1(r.bench.visionPerMin)} />
-          <Stat
-            label={tr('Balises / 10 min', 'Wards / 10 min')}
-            value={s.controlWardsPer10 !== null ? fr1(s.controlWardsPer10) : '—'}
-            ref_={fr1(r.bench.controlWardsPer10)}
-          />
-        </div>
-        <div className="mt-2 flex flex-wrap gap-1">
-          <Chip>
-            {tr('Dragons', 'Dragons')} {o.team.dragon + o.team.elder}/
-            {o.enemy.dragon + o.enemy.elder}
-          </Chip>
-          <Chip>
-            {tr('Larves', 'Grubs')} {o.team.grubs}/{o.enemy.grubs}
-          </Chip>
-          <Chip>
-            {tr('Héraut', 'Herald')} {o.team.herald}/{o.enemy.herald}
-          </Chip>
-          <Chip>
-            {tr('Nashor', 'Baron')} {o.team.baron}/{o.enemy.baron}
-          </Chip>
-          {o.team.atakhan + o.enemy.atakhan > 0 && (
+        {isMode(r.role) ? (
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+            <Stat
+              label={tr('Dégâts / min', 'Damage / min')}
+              value={fmtNumber(Math.round(s.dmgPerMin))}
+              ref_={r.bench.dmgPerMin ? fmtNumber(Math.round(r.bench.dmgPerMin)) : '—'}
+            />
+            <Stat
+              label={tr('Part des dégâts', 'Damage share')}
+              value={fmtPct(s.dmgShare)}
+              ref_={r.bench.dmgShare ? fmtPct(r.bench.dmgShare) : '—'}
+            />
+            <Stat
+              label={tr('Or / min', 'Gold / min')}
+              value={fmtNumber(Math.round(s.goldPerMin))}
+              ref_={r.bench.goldPerMin ? fmtNumber(Math.round(r.bench.goldPerMin)) : '—'}
+            />
+            <Stat
+              label={tr('Morts / 10 min', 'Deaths / 10 min')}
+              value={fr1(s.deathsPer10)}
+              ref_={r.bench.deathsPer10 ? fr1(r.bench.deathsPer10) : '—'}
+            />
+            <Stat
+              label={tr('Participation', 'Kill part.')}
+              value={fmtPct(s.kp)}
+              ref_={fmtPct(r.bench.kp)}
+            />
+            <Stat
+              label={tr('1er objet', '1st item')}
+              value={s.firstItemMin !== null ? `${fr1(s.firstItemMin)} min` : '—'}
+              ref_={`${fr1(r.bench.firstItem)}`}
+            />
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+            <Stat
+              label={tr('CS à 10 min', 'CS at 10 min')}
+              value={s.cs10 !== null ? String(s.cs10) : `${fr1(s.csPerMin)}/min`}
+              ref_={`${Math.round(r.bench.cs10)}`}
+            />
+            <Stat
+              label={tr('Or à 15 min', 'Gold at 15 min')}
+              value={
+                s.goldDiff15 !== null
+                  ? `${s.goldDiff15 >= 0 ? '+' : ''}${fmtNumber(Math.round(s.goldDiff15))}`
+                  : '—'
+              }
+              ref_={r.role === 'jungle' ? 'vs jungler' : tr('vs adversaire', 'vs opponent')}
+            />
+            <Stat
+              label={tr('Participation', 'Kill part.')}
+              value={fmtPct(s.kp)}
+              ref_={fmtPct(r.bench.kp)}
+            />
+            <Stat
+              label={tr('1er objet', '1st item')}
+              value={s.firstItemMin !== null ? `${fr1(s.firstItemMin)} min` : '—'}
+              ref_={`${fr1(r.bench.firstItem)}`}
+            />
+            <Stat
+              label="Vision / min"
+              value={fr1(s.visionPerMin)}
+              ref_={fr1(r.bench.visionPerMin)}
+            />
+            <Stat
+              label={tr('Balises / 10 min', 'Wards / 10 min')}
+              value={s.controlWardsPer10 !== null ? fr1(s.controlWardsPer10) : '—'}
+              ref_={fr1(r.bench.controlWardsPer10)}
+            />
+          </div>
+        )}
+        {!isMode(r.role) && (
+          <div className="mt-2 flex flex-wrap gap-1">
             <Chip>
-              Atakhan {o.team.atakhan}/{o.enemy.atakhan}
+              {tr('Dragons', 'Dragons')} {o.team.dragon + o.team.elder}/
+              {o.enemy.dragon + o.enemy.elder}
             </Chip>
-          )}
-          {o.smited > 0 && (
-            <Chip tone="blue">
-              {o.smited} {tr('au Châtiment', 'with Smite')}
+            <Chip>
+              {tr('Larves', 'Grubs')} {o.team.grubs}/{o.enemy.grubs}
             </Chip>
-          )}
-        </div>
+            <Chip>
+              {tr('Héraut', 'Herald')} {o.team.herald}/{o.enemy.herald}
+            </Chip>
+            <Chip>
+              {tr('Nashor', 'Baron')} {o.team.baron}/{o.enemy.baron}
+            </Chip>
+            {o.team.atakhan + o.enemy.atakhan > 0 && (
+              <Chip>
+                Atakhan {o.team.atakhan}/{o.enemy.atakhan}
+              </Chip>
+            )}
+            {o.smited > 0 && (
+              <Chip tone="blue">
+                {o.smited} {tr('au Châtiment', 'with Smite')}
+              </Chip>
+            )}
+          </div>
+        )}
         <p className="mt-2 text-[10px] text-slate-500">
-          {r.benchSource === 'master'
+          {r.benchSource !== 'défaut' && isMode(r.role)
             ? tr(
-                `Repères : moyennes des joueurs Master+ du patch (${roleLabel(r.role)}).`,
-                `Benchmarks: averages of Master+ players this patch (${roleLabel(r.role)}).`
+                `Repères : moyennes des joueurs du patch (${roleLabel(r.role)}).`,
+                `Benchmarks: averages of players this patch (${roleLabel(r.role)}).`
               )
-            : r.benchSource === 'gold'
+            : r.benchSource === 'master'
               ? tr(
-                  `Repères : moyennes des joueurs Or à Émeraude du patch (${roleLabel(r.role)}).`,
-                  `Benchmarks: averages of Gold to Emerald players this patch (${roleLabel(r.role)}).`
+                  `Repères : moyennes des joueurs Master+ du patch (${roleLabel(r.role)}).`,
+                  `Benchmarks: averages of Master+ players this patch (${roleLabel(r.role)}).`
                 )
-              : tr(
-                  'Repères par défaut (les chiffres Master+ arrivent avec la méta distante).',
-                  'Default benchmarks (Master+ numbers come with the remote meta).'
-                )}
+              : r.benchSource === 'gold'
+                ? tr(
+                    `Repères : moyennes des joueurs Or à Émeraude du patch (${roleLabel(r.role)}).`,
+                    `Benchmarks: averages of Gold to Emerald players this patch (${roleLabel(r.role)}).`
+                  )
+                : tr(
+                    'Repères par défaut (les chiffres Master+ arrivent avec la méta distante).',
+                    'Default benchmarks (Master+ numbers come with the remote meta).'
+                  )}
         </p>
       </Card>
     </>
@@ -609,8 +655,8 @@ export function ReviewTab({ t }: { t: TactiqueState }): ReactElement | null {
         <Card title={tr('Bilan d’après-partie', 'Post-game review')}>
           <p className="text-[11px] leading-relaxed text-slate-400">
             {tr(
-              'À la fin de chaque partie, à n’importe quel poste, l’application récupère la partie dans le client et analyse votre farm, votre build (comparé aux conseils de chaque moment), vos morts, les objectifs et la vision. Les points faibles qui reviennent sont rappelés avant et pendant les parties suivantes, et vos résultats affinent le build conseillé.',
-              'After each game, in any role, the app fetches the game from the client and reviews your farm, your build (compared with the advice at each moment), your deaths, objectives and vision. Recurring weaknesses are recalled before and during your next games, and your results refine the suggested build.'
+              'À la fin de chaque partie, à n’importe quel poste ou en ARAM, l’application récupère la partie dans le client et analyse votre farm (ou vos dégâts et votre or en ARAM), votre build (comparé aux conseils de chaque moment), vos morts, les objectifs et la vision. Les points faibles qui reviennent sont rappelés avant et pendant les parties suivantes, et vos résultats affinent le build conseillé.',
+              'After each game, in any role or in ARAM, the app fetches the game from the client and reviews your farm (or your damage and gold in ARAM), your build (compared with the advice at each moment), your deaths, objectives and vision. Recurring weaknesses are recalled before and during your next games, and your results refine the suggested build.'
             )}
           </p>
           <p className="mt-2 text-[11px] text-slate-300">

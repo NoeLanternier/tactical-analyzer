@@ -5,7 +5,8 @@ import { buildItemPlan, type ItemPlan } from './items'
 import { chooseVariant } from './variants'
 import { adaptChoices } from './choices'
 import { tw } from './tuning'
-import { ROLES, defaultStart, roleFromPosition, type Role } from './role'
+import { ROLES, defaultStart, isMode, roleFromPosition, type Lane, type Role } from './role'
+import { MODES, modeOf, type ModeKey } from '../../../shared/modes'
 import { analyzeThreat } from './threat'
 import { fmtNumber, fmtPct, gold, tr } from '../../../shared/i18n'
 
@@ -49,6 +50,10 @@ export interface FactPlayer {
   vision: number
   wards: number
   controlWards: number
+  /** Dégâts subis (tous types), pour les repères des modes sans voie. */
+  taken?: number
+  /** Augments choisis (ARAM Mayhem), dans l'ordre. */
+  augments?: number[]
 }
 
 export type MonsterKind = 'dragon' | 'elder' | 'grubs' | 'herald' | 'baron' | 'atakhan'
@@ -189,10 +194,16 @@ export function normalizeGame(
   if (!g || !Array.isArray(g.participants))
     return { skip: tr('données illisibles', 'unreadable data') }
   const mapId = num(g.mapId)
-  if (mapId && mapId !== 11)
+  // Mode de la partie : la Faille (postes) ou un mode pris en charge (ARAM, ARAM Mayhem…).
+  const mode = modeOf(num(g.queueId), typeof g.gameMode === 'string' ? g.gameMode : null, mapId)
+  if (mode === null)
+    return { skip: tr('mode de jeu non pris en charge', 'game mode not supported') }
+  if (mode === 'sr' && mapId && mapId !== 11)
     return { skip: tr('pas la Faille de l’invocateur', 'not Summoner’s Rift') }
   const duration = num(g.gameDuration) > 20000 ? num(g.gameDuration) / 1000 : num(g.gameDuration)
-  if (duration < 600) return { skip: tr('partie trop courte (remake)', 'game too short (remake)') }
+  // Hors Faille, les parties sont plus courtes (ARAM : 15 à 20 min) : remake sous 5 min.
+  if (duration < (mode === 'sr' ? 600 : 300))
+    return { skip: tr('partie trop courte (remake)', 'game too short (remake)') }
 
   // Joueur local : puuid, sinon identifiant d'invocateur.
   let me = 0
@@ -236,7 +247,14 @@ export function normalizeGame(
       cc: num(s.timeCCingOthers),
       vision: num(s.visionScore),
       wards: num(s.wardsPlaced),
-      controlWards: num(s.visionWardsBoughtInGame ?? s.detectorWardsPlaced)
+      controlWards: num(s.visionWardsBoughtInGame ?? s.detectorWardsPlaced),
+      taken: num(s.totalDamageTaken),
+      ...(() => {
+        const aug = [1, 2, 3, 4, 5, 6]
+          .map((i) => num(s[`playerAugment${i}`] ?? p[`playerAugment${i}`]))
+          .filter((x) => x > 0)
+        return aug.length ? { augments: aug } : {}
+      })()
     }
   })
   // Poste de chaque joueur : indication de l'historique pour l'instant ; recalculé plus bas avec
@@ -358,9 +376,15 @@ export function normalizeGame(
     }
   }
   if (facts.items.length) facts.itemSource = 'timeline'
-  const fixed = new Map<number, Role>()
+  const fixed = new Map<number, Lane>()
   if (raw.journal && resolveChamp) attachJournal(facts, raw.journal, resolveChamp, fixed)
-  if (myRole) fixed.set(me, myRole)
+  // Modes sans postes : tous les joueurs jouent « le mode ».
+  if (mode !== 'sr') {
+    for (const p of players) p.role = mode
+    facts.role = mode
+    return facts
+  }
+  if (myRole && !isMode(myRole)) fixed.set(me, myRole)
   assignRoles(players, fixed, zones)
   const mine = players.find((p) => p.pid === me)
   if (!mine?.role) return { skip: tr('poste inconnu', 'unknown position') }
@@ -629,7 +653,9 @@ const CATEGORY_LABEL: Record<Category, [string, string]> = {
   vision: ['Vision', 'Vision']
 }
 
-export function categoryLabel(c: Category): string {
+export function categoryLabel(c: Category, role?: Role): string {
+  // Modes sans voie : pas de farm de voie, l'or et les dégâts comptent.
+  if (c === 'farm' && isMode(role)) return tr('Dégâts et or', 'Damage & gold')
   return tr(...CATEGORY_LABEL[c])
 }
 
@@ -669,6 +695,11 @@ export interface GameStats {
   deathsWithGold: number
   earlyDeaths: number
   unspentShare: number | null
+  /** Or et dégâts aux champions par minute, part des dégâts de l'équipe, morts par 10 min. */
+  goldPerMin: number
+  dmgPerMin: number
+  dmgShare: number
+  deathsPer10: number
 }
 
 export interface GameReport {
@@ -713,7 +744,7 @@ export const DEFAULT_BENCH: Benchmark = {
 }
 
 /** Repères par défaut de chaque poste (remplacés par les vrais chiffres de la méta du poste). */
-export const DEFAULT_BENCH_BY_ROLE: Record<Role, Benchmark> = {
+export const DEFAULT_BENCH_BY_ROLE = {
   jungle: DEFAULT_BENCH,
   top: {
     ...DEFAULT_BENCH,
@@ -763,10 +794,41 @@ export const DEFAULT_BENCH_BY_ROLE: Record<Role, Benchmark> = {
     visionPerMin: 2.4,
     controlWardsPer10: 2.5
   }
+} as Record<Role, Benchmark>
+
+/**
+ * Repères par défaut des modes sans voie (remplacés par ceux de la méta du mode) : l'or arrive plus
+ * vite (or passif, combats permanents), on meurt plus souvent, pas de vision.
+ */
+const MODE_BENCH: Benchmark = {
+  games: 0,
+  cs10: 30,
+  cs15: 45,
+  gold15: 8000,
+  level15: 16,
+  firstItem: 7,
+  secondItem: 12,
+  kp: 0.6,
+  visionPerMin: 0,
+  controlWardsPer10: 0,
+  goldPerMin: 560,
+  dmgPerMin: 1500,
+  deathsPer10: 4.5,
+  dmgShare: 0.2
+}
+for (const m of Object.keys(MODES) as ModeKey[]) DEFAULT_BENCH_BY_ROLE[m] = MODE_BENCH
+
+/** Poids des catégories dans la note : modes sans objectifs ni vision. */
+const MODE_WEIGHTS: Record<Category, number> = {
+  farm: 0.3,
+  build: 0.3,
+  fights: 0.4,
+  objectives: 0,
+  vision: 0
 }
 
 /** Poids des catégories dans la note selon le poste. */
-const CATEGORY_WEIGHTS: Record<Role, Record<Category, number>> = {
+const CATEGORY_WEIGHTS: Record<Lane, Record<Category, number>> = {
   jungle: { farm: 0.25, build: 0.2, fights: 0.25, objectives: 0.2, vision: 0.1 },
   top: { farm: 0.3, build: 0.2, fights: 0.3, objectives: 0.1, vision: 0.1 },
   mid: { farm: 0.3, build: 0.2, fights: 0.3, objectives: 0.1, vision: 0.1 },
@@ -967,10 +1029,14 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
   const foes = facts.players.filter((p) => p.team !== me.team)
   const myRole: Role = facts.role ?? 'jungle'
   const jungle = myRole === 'jungle'
+  // Modes sans voie (ARAM…) : ni adversaire direct, ni objectifs, ni vision.
+  const mode = isMode(myRole) ? MODES[myRole] : null
   // Adversaire direct : le jungler adverse, ou le joueur d'en face au même poste.
-  const enemyJ = jungle
-    ? (foes.find((p) => p.smite) ?? foes.find((p) => p.role === 'jungle') ?? null)
-    : (foes.find((p) => p.role === myRole) ?? null)
+  const enemyJ = mode
+    ? null
+    : jungle
+      ? (foes.find((p) => p.smite) ?? foes.find((p) => p.role === 'jungle') ?? null)
+      : (foes.find((p) => p.role === myRole) ?? null)
   const enemyJIdx = enemyJ ? facts.players.indexOf(enemyJ) : -1
   const minutes = facts.duration / 60
   const hasTimeline = facts.frames.length >= 5
@@ -1019,8 +1085,62 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         : tr('ton adversaire direct', 'your lane opponent')))
     : ''
 
-  // Support : le farm ne compte pas (il revient aux autres postes).
-  const farms = myRole !== 'support'
+  // Support : le farm ne compte pas (il revient aux autres postes). Modes : pas de farm de voie.
+  const farms = myRole !== 'support' && !mode
+  // Or et dégâts aux champions par minute, et part des dégâts de l'équipe.
+  const goldPerMin = me.gold / Math.max(minutes, 1)
+  const dmg = me.phys + me.magic
+  const dmgPerMin = dmg / Math.max(minutes, 1)
+  const teamDmg = facts.players
+    .filter((p) => p.team === me.team)
+    .reduce((t, p) => t + p.phys + p.magic, 0)
+  const dmgShare = teamDmg > 0 ? dmg / teamDmg : 0
+  if (mode) {
+    const bGold = bench.goldPerMin ?? MODE_BENCH.goldPerMin!
+    const bDmg = bench.dmgPerMin ?? MODE_BENCH.dmgPerMin!
+    const bShare = bench.dmgShare ?? MODE_BENCH.dmgShare!
+    sub.farm.push(rate(goldPerMin, bGold))
+    // Tanks et soutiens : moins de dégâts, plus de dégâts subis ; on ne juge les dégâts que pour
+    // les champions qui en font habituellement.
+    const dealer = bShare >= 0.17
+    if (dealer) sub.farm.push(rate(dmgPerMin, bDmg))
+    if (dealer && dmgPerMin < bDmg * 0.7 && minutes >= 10)
+      push({
+        id: 'mode-dmg-low',
+        cat: 'farm',
+        tone: 'bad',
+        title: tr(
+          `Peu de dégâts : ${fmtNumber(Math.round(dmgPerMin))} par minute`,
+          `Low damage: ${fmtNumber(Math.round(dmgPerMin))} per minute`
+        ),
+        detail: bench_(`${fmtNumber(Math.round(bDmg))} / min`),
+        impact: 0.55
+      })
+    else if (dealer && dmgPerMin >= bDmg * 1.2)
+      push({
+        id: 'mode-dmg-good',
+        cat: 'farm',
+        tone: 'good',
+        title: tr(
+          `Beaucoup de dégâts : ${fmtPct(dmgShare)} de ceux de l’équipe`,
+          `High damage: ${fmtPct(dmgShare)} of your team’s`
+        ),
+        detail: bench_(`${fmtNumber(Math.round(bDmg))} / min`),
+        impact: 0.45
+      })
+    if (goldPerMin < bGold * 0.85 && minutes >= 10)
+      push({
+        id: 'mode-gold-low',
+        cat: 'farm',
+        tone: 'bad',
+        title: tr(
+          `Peu d’or : ${fmtNumber(Math.round(goldPerMin))} par minute`,
+          `Low gold: ${fmtNumber(Math.round(goldPerMin))} per minute`
+        ),
+        detail: bench_(`${fmtNumber(Math.round(bGold))} / min`),
+        impact: 0.4
+      })
+  }
   if (cs10 !== null && farms) {
     const s = rate(cs10, bench.cs10)
     sub.farm.push(s)
@@ -1394,7 +1514,9 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
       })
   }
   const deathsPer10 = (me.d / Math.max(minutes, 1)) * 10
-  sub.fights.push(rate(deathsPer10, 1.6, true))
+  // Repère de morts : celui du mode (on meurt bien plus souvent en ARAM), sinon 1,6 / 10 min.
+  const deathsTarget = mode ? (bench.deathsPer10 ?? MODE_BENCH.deathsPer10!) : 1.6
+  sub.fights.push(rate(deathsPer10, deathsTarget, true))
   const myDeaths = facts.kills.filter((k) => k[2] === me.pid)
   const earlyDeaths = myDeaths.filter((k) => k[0] < 14 * 60).length
   let deathsWithGold = 0
@@ -1414,7 +1536,9 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         worstGold = Math.max(worstGold, g)
       }
     }
-    if (earlyDeaths >= 3) {
+    if (mode) {
+      // Pas de début de partie en voie ni de retour à la base : rien à juger ici.
+    } else if (earlyDeaths >= 3) {
       sub.fights.push(25)
       push({
         id: 'early-deaths',
@@ -1440,7 +1564,8 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         impact: 0.35
       })
     }
-    if (deathsWithGold >= 2)
+    // Sans retour à la base (ARAM), l'or ne se dépense qu'à la mort : rien d'anormal.
+    if (deathsWithGold >= 2 && (!mode || mode.recall))
       push({
         id: 'deaths-gold',
         cat: 'fights',
@@ -1456,19 +1581,19 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         impact: 0.55
       })
   }
-  if (me.d >= 9)
+  if (mode ? deathsPer10 >= deathsTarget * 1.5 && me.d >= 8 : me.d >= 9)
     push({
       id: 'many-deaths',
       cat: 'fights',
       tone: 'bad',
       title: tr(`${me.d} morts`, `${me.d} deaths`),
       detail: tr(
-        `${fr1(deathsPer10)} morts toutes les 10 min (repère : moins de ${fr1(1.6)}).`,
-        `${fr1(deathsPer10)} deaths per 10 min (benchmark: under ${fr1(1.6)}).`
+        `${fr1(deathsPer10)} morts toutes les 10 min (repère : moins de ${fr1(deathsTarget)}).`,
+        `${fr1(deathsPer10)} deaths per 10 min (benchmark: under ${fr1(deathsTarget)}).`
       ),
       impact: 0.5 + Math.min(0.3, (me.d - 9) * 0.05)
     })
-  else if (me.d <= 2 && minutes >= 22)
+  else if (mode ? deathsPer10 <= deathsTarget * 0.6 && minutes >= 12 : me.d <= 2 && minutes >= 22)
     push({
       id: 'few-deaths',
       cat: 'fights',
@@ -1479,7 +1604,8 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
 
   // Or non dépensé (gestion des retours).
   let unspentShare: number | null = null
-  if (hasTimeline && facts.frames.length > 10) {
+  // Sans retour à la base, on ne peut acheter qu'à la mort : l'or en poche n'est pas une faute.
+  if (hasTimeline && facts.frames.length > 10 && (!mode || mode.recall)) {
     const late = facts.gold?.length
       ? facts.gold.filter(([t]) => t >= 6 * 60).map(([, g]) => g)
       : facts.frames.slice(6).map((f) => f[meIdx][1])
@@ -1607,10 +1733,17 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
       impact: 0.3
     })
 
+  // Modes sans objectifs ni vision (ARAM…) : ces catégories ne comptent pas.
+  if (mode) {
+    sub.objectives = []
+    sub.vision = []
+    for (let i = findings.length - 1; i >= 0; i--)
+      if (findings[i].cat === 'objectives' || findings[i].cat === 'vision') findings.splice(i, 1)
+  }
   const scores: Partial<Record<Category, number>> = {}
   for (const c of Object.keys(sub) as Category[])
     if (sub[c].length) scores[c] = Math.round(mean(sub[c]))
-  const WEIGHTS = CATEGORY_WEIGHTS[myRole]
+  const WEIGHTS = mode ? MODE_WEIGHTS : CATEGORY_WEIGHTS[myRole as Lane]
   let wTotal = 0
   let sTotal = 0
   for (const [c, s] of Object.entries(scores) as [Category, number][]) {
@@ -1649,7 +1782,11 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
       secondItemMin,
       deathsWithGold,
       earlyDeaths,
-      unspentShare
+      unspentShare,
+      goldPerMin,
+      dmgPerMin,
+      dmgShare,
+      deathsPer10
     },
     legendaries,
     bench,
@@ -1660,8 +1797,32 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
 }
 
 /** Conseil d'un point faible, avec les repères remplacés. */
+/** Conseils des modes sans voie (ARAM…), à la place des conseils de la Faille. */
+const MODE_TIPS: Record<string, [string, string]> = {
+  'mode-dmg-low': [
+    'Reste à portée des combats : en ARAM, les dégâts viennent des échanges permanents, pas des coups isolés.',
+    'Stay in range of the fights: in ARAM, damage comes from constant trades, not isolated hits.'
+  ],
+  'mode-gold-low': [
+    'Participe aux éliminations et ramasse les vagues proches : l’or vient surtout des combats.',
+    'Take part in kills and clear nearby waves: gold mostly comes from fights.'
+  ],
+  'kp-low': [
+    'Joue avec ton équipe : un joueur isolé sur l’Abîme meurt sans rien rapporter.',
+    'Play with your team: an isolated player on the Abyss dies for nothing.'
+  ],
+  'many-deaths': [
+    'Garde un sort de mobilité pour reculer, et reviens au combat quand ton équipe est là.',
+    'Keep a mobility spell to back off, and re-engage when your team is there.'
+  ],
+  'first-item-late': [
+    'Pas de retour en base : achète à chaque mort, et prends les packs de soin au lieu de reculer.',
+    'No recall: buy on each death, and grab health relics instead of backing off.'
+  ]
+}
+
 export function tipFor(id: string, bench: Benchmark, role: Role = 'jungle'): string | undefined {
-  const tip = ROLE_TIPS[role]?.[id] ?? TIPS[id]
+  const tip = (isMode(role) ? MODE_TIPS[id] : undefined) ?? ROLE_TIPS[role]?.[id] ?? TIPS[id]
   return tip ? tr(...tip).replace('{first}', fr1(bench.firstItem)) : undefined
 }
 

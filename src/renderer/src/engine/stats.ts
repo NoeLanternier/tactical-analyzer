@@ -9,8 +9,11 @@
 export interface Priors {
   /** Affrontement direct (adversaire de voie, jungler adverse). */
   vs: number
-  /** Synergie avec un allié, affrontement avec un adversaire hors voie. */
+  /** Synergie avec un allié, affrontement avec un adversaire hors voie (métas d'avant leur séparation). */
   pair: number
+  /** Écart propre avec un allié (synergie), et face à un adversaire hors voie. */
+  with: number
+  against: number
   /** Champion face à un type de composition adverse. */
   comp: number
   /** Famille de build (premier objet), et famille selon la composition adverse. */
@@ -34,6 +37,8 @@ export interface Priors {
 export const DEFAULT_PRIORS: Priors = {
   vs: 1000,
   pair: 20000,
+  with: 20000,
+  against: 20000,
   comp: 1500,
   fam: 5000,
   famCtx: 5000,
@@ -62,6 +67,9 @@ export function parsePriors(raw: unknown): Priors | undefined {
     const v = num(r[key])
     if (v !== null) out[key] = Math.max(100, Math.min(50000, v))
   }
+  // Méta d'avant la séparation alliés / adversaires : une seule force pour les deux.
+  if (num(r.with) === null) out.with = out.pair
+  if (num(r.against) === null) out.against = out.pair
   const slope = r.slope as Record<string, unknown> | undefined
   for (const key of ['item', 'skills', 'start'] as const) {
     const v = slope?.[key]
@@ -69,6 +77,34 @@ export function parsePriors(raw: unknown): Priors | undefined {
       out.slope[key] = Math.max(0, Math.min(0.005, v))
   }
   return out
+}
+
+/**
+ * Équilibre de l'équipe, mesuré par la collecte sur les paires d'alliés : ce que coûte de
+ * ressembler à ses alliés (dégâts magiques × dégâts magiques, résistance × résistance). L'effet d'un
+ * champion c avec un allié a vaut coef × (profil(c) − centre[0]) × (profil(a) − centre[1]).
+ */
+export interface TeamFit {
+  ap: number
+  tank: number
+  center: { ap: [number, number]; tank: [number, number] }
+}
+
+export function parseFit(raw: unknown): TeamFit | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as { ap?: unknown; tank?: unknown; center?: { ap?: unknown; tank?: unknown } }
+  const coef = (x: unknown): number | null =>
+    typeof x === 'number' && Number.isFinite(x) ? clamp(x, -0.04, 0) : null
+  const pair = (x: unknown): [number, number] | null =>
+    Array.isArray(x) && x.length === 2 && x.every((v) => typeof v === 'number' && v >= 0 && v <= 1)
+      ? [x[0], x[1]]
+      : null
+  const ap = coef(r.ap)
+  const tank = coef(r.tank)
+  const centerAp = pair(r.center?.ap)
+  const centerTank = pair(r.center?.tank)
+  if (ap === null || tank === null || !centerAp || !centerTank) return undefined
+  return { ap, tank, center: { ap: centerAp, tank: centerTank } }
 }
 
 /** Taux estimé : taux observé sur `games` parties, ramené vers `prior` avec une force `k`. */

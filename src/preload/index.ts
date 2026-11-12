@@ -15,11 +15,14 @@ const api: TactiqueApi = {
   onLiveUpdate: (cb) => listen('live-update', cb),
   onTogglePin: (cb) => listen('toggle-pin', () => cb()),
   onLangUpdate: (cb) => listen('lang-update', cb),
+  onQueueUpdate: (cb) => listen('lcu-queue-update', cb),
   getInitialState: () => ipcRenderer.invoke('get-initial-state'),
   applyRunes: (payload) => ipcRenderer.invoke('apply-runes', payload),
   applyItemSet: (payload) => ipcRenderer.invoke('apply-item-set', payload),
-  getRecommendedRunes: (championId, position) =>
-    ipcRenderer.invoke('get-recommended-runes', championId, position),
+  getRecommendedRunes: (championId, position, mapId) =>
+    ipcRenderer.invoke('get-recommended-runes', championId, position, mapId),
+  swapWithBench: (championId) => ipcRenderer.invoke('swap-with-bench', championId),
+  reroll: () => ipcRenderer.invoke('reroll'),
   getRiotStart: (alias) => ipcRenderer.invoke('get-riot-start', alias),
   getChampionPool: () => ipcRenderer.invoke('get-champion-pool'),
   getRankedTier: () => ipcRenderer.invoke('get-ranked-tier'),

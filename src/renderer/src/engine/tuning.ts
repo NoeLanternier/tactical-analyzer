@@ -15,8 +15,11 @@ export const TUNING_KEYS = [
 ] as const
 export type TuningKey = (typeof TUNING_KEYS)[number]
 
-/** Version des critères mesurés : 2 = écarts lissés avec les forces publiées (meta.priors). */
-const TUNING_VERSION = 2
+/**
+ * Version des critères mesurés : 2 = écarts lissés avec les forces publiées (meta.priors) ;
+ * 3 = affrontement et paires réduits à l'écart propre au champion (effet général retiré).
+ */
+const TUNING_VERSION = 3
 
 export interface EngineTuning {
   /** Parties utilisées pour le réglage. */
@@ -33,7 +36,7 @@ export const tw = (tuning: EngineTuning | undefined | null, key: TuningKey): num
 export function parseTuning(data: unknown): EngineTuning | undefined {
   if (!data || typeof data !== 'object') return undefined
   const raw = data as { v?: unknown; games?: unknown; weights?: unknown }
-  // Réglage d'avant les lissages mesurés : il corrigeait d'anciens calculs, on l'ignore.
+  // Réglage d'une autre version des critères : il corrigeait d'autres calculs, on l'ignore.
   if (raw.v !== TUNING_VERSION) return undefined
   const games = typeof raw.games === 'number' && Number.isFinite(raw.games) ? raw.games : 0
   if (games < MIN_TUNING_GAMES || !raw.weights || typeof raw.weights !== 'object') return undefined

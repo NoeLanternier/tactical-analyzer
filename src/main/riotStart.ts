@@ -19,7 +19,9 @@ const urlOf = (alias: string): string => {
 export async function getRiotStart(alias: string): Promise<RiotStartBundles | null> {
   if (RIOT_COMPLIANT || !alias) return null
   const url = urlOf(alias)
-  const cached = loadMetaCache(url)
+  // Copie locale par carte et mode (v2) : les anciennes copies ne gardaient que la Faille.
+  const key = `${url}#v2`
+  const cached = loadMetaCache(key)
   if (cached && Date.now() - Date.parse(cached.savedAt) < DAY)
     return cached.data as RiotStartBundles
   const controller = new AbortController()
@@ -28,7 +30,7 @@ export async function getRiotStart(alias: string): Promise<RiotStartBundles | nu
     const res = await net.fetch(url, { signal: controller.signal })
     // Champion absent (404) : liste vide, gardée en cache pour ne pas redemander.
     const data = res.ok ? extractRiotStart(await res.json()) : res.status === 404 ? [] : null
-    if (data) saveMetaCache(url, data)
+    if (data) saveMetaCache(key, data)
     return data ?? (cached?.data as RiotStartBundles) ?? null
   } catch (error) {
     debugLog('riotStart', { alias, error: String(error) })

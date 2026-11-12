@@ -170,6 +170,8 @@ export function buildGameData(raw: RawGameData): GameData {
   for (const [idStr, it] of Object.entries<any>(raw.itemsEn?.data ?? {})) {
     const id = Number(idStr)
     const onRift = Boolean(it.maps?.['11'])
+    // Objets de l'Abîme hurlant (ARAM, ARAM Mayhem) absents de la Faille : objets finaux aussi.
+    const onAbyss = Boolean(it.maps?.['12'])
     const purchasable = it.gold?.purchasable !== false && it.inStore !== false
     const tags: string[] = Array.isArray(it.tags) ? it.tags : []
     const into: number[] = Array.isArray(it.into) ? it.into.map(Number) : []
@@ -190,7 +192,7 @@ export function buildGameData(raw: RawGameData): GameData {
       description,
       isBoots: tags.includes('Boots') && total >= 900,
       isLegendary:
-        onRift &&
+        (onRift || onAbyss) &&
         into.length === 0 &&
         total >= 2000 &&
         !tags.includes('Consumable') &&

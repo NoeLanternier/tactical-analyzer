@@ -2,7 +2,9 @@ import type { RiotStartBundles } from '../../../shared/types'
 import type { JunglerBuild } from '../data/junglers'
 import type { GameData } from './gameData'
 import { norm } from './normalize'
-import { clientPosition, defaultStart, type Role } from './role'
+import { clientPosition, defaultStart, isMode, mapOf, type Role } from './role'
+import { riotStartFor } from '../../../shared/riotStart'
+import { MODES } from '../../../shared/modes'
 
 // Objets de départ hors jungle (la jungle commence par son familier) : les départs proposés par
 // la boutique du jeu quand on les connaît (édition personnelle), sinon les départs courants des
@@ -28,9 +30,16 @@ export interface StartPlan {
 /** Clé d'un départ, indépendante de l'ordre des objets. */
 const keyOf = (items: string[]): string => items.map(norm).sort().join('+')
 
-/** Départs de la boutique pour ce poste : ceux du poste s'il en a, sinon ceux de tous les postes. */
-export function riotBundlesFor(data: RiotStartBundles | null, role: Role): number[][] {
-  if (!data?.length) return []
+/**
+ * Départs de la boutique pour ce poste ou ce mode : ceux de la carte et du mode (ARAM Mayhem :
+ * sinon ceux de l'ARAM), puis ceux du poste s'il en a, sinon ceux de tous les postes.
+ */
+export function riotBundlesFor(all: RiotStartBundles | null, role: Role): number[][] {
+  if (!all?.length) return []
+  const map = mapOf(role)
+  let data = riotStartFor(all, map, isMode(role) ? MODES[role].gameModes : ['CLASSIC'])
+  if (!data.length && isMode(role) && map === 12) data = riotStartFor(all, 12, ['ARAM'])
+  if (!data.length) return []
   const pos = clientPosition(role).toLowerCase()
   const alias = role === 'support' ? 'support' : role === 'bot' ? 'adc' : role
   const own = data.find((d) => {

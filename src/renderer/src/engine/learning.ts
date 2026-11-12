@@ -4,7 +4,8 @@ import type { PersonalItemBonus, ItemPlan } from './items'
 import { norm } from './normalize'
 import { CONTROL_WARD_ID, DEFAULT_BENCH, tipFor, type Category, type GameReport } from './postgame'
 import { fmtNumber, fmtPct, gold as goldText, tr } from '../../../shared/i18n'
-import type { Role } from './role'
+import { isMode, type Role } from './role'
+import { MODES } from '../../../shared/modes'
 
 // Apprentissage à partir des bilans : l'application s'améliore à chaque partie jouée.
 //
@@ -302,8 +303,10 @@ export function liveNudges(
   const t = live.gameTime
   const gold = live.activePlayer?.currentGold ?? 0
 
+  // Modes sans voie : pas de retour à la base (ARAM), pas de farm de voie ni de vision.
+  const mode = isMode(role) ? MODES[role] : null
   const goldWeak = weak.has('unspent-gold') || weak.has('deaths-gold')
-  if ((goldWeak && gold >= 1300) || gold >= 2200) {
+  if (((goldWeak && gold >= 1300) || gold >= 2200) && (!mode || mode.recall)) {
     const target = plan?.next?.affordable ? plan.next.item.label : null
     out.push({
       id: 'gold',
@@ -315,6 +318,7 @@ export function liveNudges(
     })
   }
   if (
+    (!mode || mode.wards) &&
     (weak.has('no-control-ward') || weak.has('vision-low')) &&
     t >= 6 * 60 &&
     !me.items.some((i) => i.itemID === CONTROL_WARD_ID)
@@ -328,7 +332,7 @@ export function liveNudges(
       tone: 'blue'
     })
   }
-  if ((weak.has('cs-low') || weak.has('gold-behind')) && t >= 5 * 60 && t <= 20 * 60) {
+  if (!mode && (weak.has('cs-low') || weak.has('gold-behind')) && t >= 5 * 60 && t <= 20 * 60) {
     const perMin = me.scores.creepScore / (t / 60)
     const target = bench.cs10 / 10
     if (perMin < target * 0.88)
@@ -345,7 +349,7 @@ export function liveNudges(
         tone: 'orange'
       })
   }
-  if (weak.has('early-deaths') && t < 14 * 60) {
+  if (!mode && weak.has('early-deaths') && t < 14 * 60) {
     out.push({
       id: 'early',
       text: tr(

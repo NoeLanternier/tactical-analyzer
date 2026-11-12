@@ -93,6 +93,8 @@ function normalize(raw: any): LiveGameData | null {
     }))
   return {
     gameTime: Number(raw.gameData?.gameTime ?? 0),
+    gameMode: String(raw.gameData?.gameMode ?? ''),
+    mapNumber: Number(raw.gameData?.mapNumber ?? 0) || 0,
     kills,
     // En mode spectateur, il n'y a pas de joueur actif.
     activePlayer:

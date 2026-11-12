@@ -3,7 +3,8 @@ import type { GamePhase, RawPostGame } from '../../../shared/types'
 import type { Catalog } from '../engine/catalog'
 import { champFromLive, type GameData } from '../engine/gameData'
 import { tr, type Lang } from '../../../shared/i18n'
-import type { Role } from '../engine/role'
+import { isMode, type Role } from '../engine/role'
+import { modeOf } from '../../../shared/modes'
 import { useRoleCatalogs } from './useRemoteMeta'
 import { computeLearning, type Learning } from '../engine/learning'
 import {
@@ -195,7 +196,8 @@ export function useReview(
       void (async () => {
         try {
           const recent = (await window.api.getRecentGames(count)).filter(
-            (g) => !known.has(g.gameId) && (!g.mapId || g.mapId === 11)
+            // Faille et modes pris en charge (ARAM, ARAM Mayhem…) ; pas l'Arène ni TFT.
+            (g) => !known.has(g.gameId) && modeOf(g.queueId, null, g.mapId) !== null
           )
           let added = 0
           for (let i = 0; i < recent.length; i++) {
@@ -251,7 +253,12 @@ export function useReview(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
   }, [gd, catalog, role, others, facts, lang])
 
-  const learning = useMemo(() => computeLearning(reports), [reports])
+  // Apprentissage : parties de la Faille entre elles (tous postes), et chaque mode à part (un
+  // objet ou une erreur en ARAM ne dit rien de la Faille, et inversement).
+  const learning = useMemo(() => {
+    const mode = isMode(role) ? role : null
+    return computeLearning(reports.filter((r) => (isMode(r.role) ? r.role : null) === mode))
+  }, [reports, role])
 
   return {
     reports,

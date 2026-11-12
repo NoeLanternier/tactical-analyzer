@@ -9,7 +9,9 @@ import {
 } from 'league-connect'
 import {
   EMPTY_DRAFT,
+  NO_QUEUE,
   type ActionResult,
+  type GameQueue,
   type ChampionPool,
   type DraftState,
   type GamePhase,
@@ -48,6 +50,8 @@ export class LcuService extends EventEmitter {
   status: LcuStatus = 'disconnected'
   phase: GamePhase = 'None'
   draft: DraftState = EMPTY_DRAFT
+  /** File de la partie (mode de jeu), lue dès le salon. */
+  queue: GameQueue = NO_QUEUE
   /** Langue du client League of Legends ("fr_FR", "en_US"...), null si inconnue. */
   locale: string | null = null
 
@@ -92,6 +96,7 @@ export class LcuService extends EventEmitter {
       this.setStatus('disconnected')
       this.setPhase('None')
       this.setDraft(EMPTY_DRAFT)
+      this.setQueue(NO_QUEUE)
       await sleep(3000)
     }
   }
@@ -99,6 +104,10 @@ export class LcuService extends EventEmitter {
   private subscribe(ws: LeagueWebSocket): void {
     ws.subscribe('/lol-gameflow/v1/gameflow-phase', (data) => {
       if (typeof data === 'string') this.setPhase(data)
+    })
+    ws.subscribe('/lol-gameflow/v1/session', (data, event: any) => {
+      if (event?.eventType === 'Delete') return
+      this.processGameflow(data)
     })
     ws.subscribe('/lol-champ-select/v1/session', (data, event: any) => {
       // À la fin de la sélection, le client envoie un événement "Delete" sans données : on garde
@@ -120,6 +129,8 @@ export class LcuService extends EventEmitter {
       debugLog('lcu', { localeError: String(error) })
     }
     try {
+      const flow = await this.request<any>('GET', '/lol-gameflow/v1/session')
+      if (flow.ok) this.processGameflow(flow.data)
       const phase = await this.request<string>('GET', '/lol-gameflow/v1/gameflow-phase')
       if (phase.ok && typeof phase.data === 'string') this.setPhase(phase.data)
       if (this.phase === 'ChampSelect') {
@@ -129,6 +140,19 @@ export class LcuService extends EventEmitter {
     } catch (error) {
       debugLog('lcu', { initialStateError: String(error) })
     }
+  }
+
+  /** File, mode et carte de la partie (salon, sélection, partie). */
+  private processGameflow(data: any): void {
+    const queue = data?.gameData?.queue ?? {}
+    const next: GameQueue = {
+      queueId: Number(queue.id ?? data?.gameData?.queueId ?? 0) || 0,
+      gameMode: String(queue.gameMode ?? data?.map?.gameMode ?? ''),
+      mapId: Number(queue.mapId ?? data?.map?.id ?? 0) || 0
+    }
+    // Pas de partie (accueil) : on garde la dernière file connue jusqu'au prochain salon.
+    if (!next.queueId && !next.gameMode) return
+    this.setQueue(next)
   }
 
   private processSession(data: any): void {
@@ -157,6 +181,12 @@ export class LcuService extends EventEmitter {
     for (const id of [...(data.bans?.myTeamBans ?? []), ...(data.bans?.theirTeamBans ?? [])])
       if (id > 0) bannedIds.add(id)
 
+    // Banc (modes tirés au hasard) : ancien format (identifiants) ou nouveau (objets).
+    const bench: number[] = Array.isArray(data.benchChampions)
+      ? data.benchChampions.map((b: any) => Number(b?.championId ?? b))
+      : Array.isArray(data.benchChampionIds)
+        ? data.benchChampionIds.map(Number)
+        : []
     const draft: DraftState = {
       localChampId,
       isLocked,
@@ -171,7 +201,10 @@ export class LcuService extends EventEmitter {
       bannedIds: [...bannedIds],
       banTurn: inProgress('ban'),
       pickTurn: inProgress('pick'),
-      timerPhase: String(data.timer?.phase ?? '')
+      timerPhase: String(data.timer?.phase ?? ''),
+      benchEnabled: Boolean(data.benchEnabled),
+      benchIds: bench.filter((id) => Number.isFinite(id) && id > 0),
+      rerolls: Math.max(0, Number(data.rerollsRemaining ?? me?.rerollsRemaining ?? 0) || 0)
     }
     debugLog('draft', { phase: this.phase, timer: data.timer?.phase, draft })
     this.setDraft(draft)
@@ -322,15 +355,21 @@ export class LcuService extends EventEmitter {
   }
 
   /** Pages recommandées par Riot (données du patch en cours) pour un champion et un poste. */
-  async getRecommendedRunes(championId: number, position: string): Promise<RecommendedRunePage[]> {
+  async getRecommendedRunes(
+    championId: number,
+    position: string,
+    mapId = 11
+  ): Promise<RecommendedRunePage[]> {
     if (!this.credentials || !championId) return []
-    const pos = position || 'jungle'
+    const map = mapId > 0 ? mapId : 11
+    // Hors Faille, pas de poste : le client attend « NONE ».
+    const pos = position || (map === 11 ? 'jungle' : 'none')
     const candidates = Array.from(new Set([pos.toUpperCase(), pos.toLowerCase()]))
     for (const p of candidates) {
       try {
         const res = await this.request<any[]>(
           'GET',
-          `/lol-perks/v1/recommended-pages/champion/${championId}/position/${p}/map/11`
+          `/lol-perks/v1/recommended-pages/champion/${championId}/position/${p}/map/${map}`
         )
         if (!res.ok || !Array.isArray(res.data)) continue
         const pages = res.data
@@ -393,7 +432,7 @@ export class LcuService extends EventEmitter {
         startedFrom: 'blank',
         uid: randomUUID(),
         associatedChampions: [payload.championId],
-        associatedMaps: [11],
+        associatedMaps: payload.map === 0 ? [] : [payload.map ?? 11],
         preferredItemSlots: [],
         blocks: payload.blocks.map((b) => ({
           type: b.type,
@@ -413,6 +452,45 @@ export class LcuService extends EventEmitter {
           error: `${tr('Set refusé', 'Item set refused')} (${LcuService.errorMessage(put)})`
         }
       return { success: true }
+    } catch (error) {
+      return { success: false, error: String((error as Error)?.message ?? error) }
+    }
+  }
+
+  // --- Banc et relances (modes tirés au hasard) -----------------------------------------------
+
+  /** Prend un champion du banc (ARAM…). */
+  async swapWithBench(championId: number): Promise<ActionResult> {
+    try {
+      if (!this.draft.benchIds.includes(championId))
+        return { success: false, error: tr('Champion absent du banc', 'Champion not on the bench') }
+      const res = await this.request(
+        'POST',
+        `/lol-champ-select/v1/session/bench/swap/${championId}`
+      )
+      return res.ok
+        ? { success: true }
+        : {
+            success: false,
+            error: `${tr('Échange refusé', 'Swap refused')} (${LcuService.errorMessage(res)})`
+          }
+    } catch (error) {
+      return { success: false, error: String((error as Error)?.message ?? error) }
+    }
+  }
+
+  /** Relance le champion (ARAM…) : le champion actuel part sur le banc. */
+  async reroll(): Promise<ActionResult> {
+    try {
+      if (this.draft.rerolls <= 0)
+        return { success: false, error: tr('Plus de relance', 'No reroll left') }
+      const res = await this.request('POST', '/lol-champ-select/v1/session/my-selection/reroll')
+      return res.ok
+        ? { success: true }
+        : {
+            success: false,
+            error: `${tr('Relance refusée', 'Reroll refused')} (${LcuService.errorMessage(res)})`
+          }
     } catch (error) {
       return { success: false, error: String((error as Error)?.message ?? error) }
     }
@@ -521,6 +599,18 @@ export class LcuService extends EventEmitter {
     this.phase = phase
     this.emit('phase', phase)
     if (RESET_PHASES.includes(phase)) this.setDraft(EMPTY_DRAFT)
+  }
+
+  private setQueue(queue: GameQueue): void {
+    if (
+      queue.queueId === this.queue.queueId &&
+      queue.gameMode === this.queue.gameMode &&
+      queue.mapId === this.queue.mapId
+    )
+      return
+    this.queue = queue
+    debugLog('queue', queue)
+    this.emit('queue', queue)
   }
 
   private setDraft(draft: DraftState): void {

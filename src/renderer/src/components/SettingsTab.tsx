@@ -293,8 +293,8 @@ export function SettingsTab({ t }: { t: TactiqueState }): ReactElement {
         <Toggle
           label={tr('Bilan automatique en fin de partie', 'Automatic post-game review')}
           hint={tr(
-            'Analyse chaque partie, à tous les postes (farm, build, combats, objectifs, vision).',
-            'Reviews every game, in every role (farm, build, fights, objectives, vision).'
+            'Analyse chaque partie, à tous les postes et en ARAM (farm ou dégâts et or, build, combats, objectifs, vision).',
+            'Reviews every game, in every role and in ARAM (farm or damage and gold, build, fights, objectives, vision).'
           )}
           checked={s.autoReview}
           onChange={(v) => update({ autoReview: v })}
@@ -347,12 +347,12 @@ export function SettingsTab({ t }: { t: TactiqueState }): ReactElement {
       <Card title={tr('Mise à jour de la méta', 'Meta updates')}>
         <p className="mb-2 text-[10px] leading-snug text-slate-500">
           {tr(
-            'Méta recalculée chaque nuit à partir des parties Master+ et Or à Émeraude. Laisser vide pour la méta officielle ; une autre URL permet d’utiliser votre propre fichier.',
-            'Meta recalculated every night from Master+ and Gold to Emerald games. Leave empty for the official meta; another URL lets you use your own file.'
+            'Méta recalculée plusieurs fois par jour à partir des parties Master+ et Or à Émeraude, et des parties ARAM, ARAM Mayhem et des modes temporaires. Laisser vide pour la méta officielle ; une autre URL permet d’utiliser votre propre fichier.',
+            'Meta recalculated several times a day from Master+ and Gold to Emerald games, and from ARAM, ARAM: Mayhem and rotating-mode games. Leave empty for the official meta; another URL lets you use your own file.'
           )}
         </p>
         <label className={rowClass}>
-          {tr('Poste', 'Role')}
+          {tr('Poste (Faille)', 'Role (Rift)')}
           <select
             className={selectClass}
             value={s.role}
@@ -383,6 +383,12 @@ export function SettingsTab({ t }: { t: TactiqueState }): ReactElement {
             <option value="master">Master+</option>
           </select>
         </label>
+        <p className="text-[10px] leading-snug text-slate-500">
+          {tr(
+            'En ARAM, ARAM Mayhem et dans les modes temporaires (URF, Un pour tous…), le mode est détecté tout seul et ses données viennent de joueurs de tous rangs : le poste et le niveau ne s’appliquent qu’à la Faille.',
+            'In ARAM, ARAM: Mayhem and rotating modes (URF, One for All…), the mode is detected automatically and its data comes from players of every rank: role and level only apply to the Rift.'
+          )}
+        </p>
         <div className="flex gap-1.5">
           <input
             className="min-w-0 flex-1 rounded border border-white/10 bg-slate-900 px-2 py-1 text-[11px]"

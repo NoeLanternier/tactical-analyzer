@@ -45,7 +45,21 @@ export interface DraftState {
   pickTurn: boolean
   /** Phase du minuteur de sélection : PLANNING, BAN_PICK, FINALIZATION... */
   timerPhase: string
+  /** Modes tirés au hasard (ARAM…) : champions du banc, relances restantes. */
+  benchEnabled: boolean
+  benchIds: number[]
+  rerolls: number
 }
+
+/** File de la partie en cours (salon, sélection ou partie), lue dans le client. */
+export interface GameQueue {
+  queueId: number
+  /** Mode du jeu : « CLASSIC », « ARAM », « KIWI » (ARAM Mayhem)… */
+  gameMode: string
+  mapId: number
+}
+
+export const NO_QUEUE: GameQueue = { queueId: 0, gameMode: '', mapId: 0 }
 
 /** Champions du joueur : maîtrise (points) et champions possédés ou gratuits. */
 export interface ChampionPool {
@@ -73,7 +87,10 @@ export const EMPTY_DRAFT: DraftState = {
   bannedIds: [],
   banTurn: false,
   pickTurn: false,
-  timerPhase: ''
+  timerPhase: '',
+  benchEnabled: false,
+  benchIds: [],
+  rerolls: 0
 }
 
 export interface RunePagePayload {
@@ -92,6 +109,8 @@ export interface ItemSetBlock {
 export interface ItemSetPayload {
   title: string
   championId: number
+  /** Carte du set (11 Faille, 12 Abîme hurlant ; 0 : toutes). */
+  map?: number
   blocks: ItemSetBlock[]
 }
 
@@ -139,6 +158,9 @@ export interface LiveKill {
 
 export interface LiveGameData {
   gameTime: number
+  /** Mode du jeu (« CLASSIC », « ARAM », « KIWI »…) et carte, selon l'API en jeu. */
+  gameMode?: string
+  mapNumber?: number
   /** Éliminations de champions depuis le début de la partie. */
   kills?: LiveKill[]
   activePlayer: {
@@ -253,8 +275,16 @@ export interface GameJournal {
   gold: [number, number][]
 }
 
-/** Départs de la boutique du jeu : par poste (null : tous), listes d'identifiants d'objets. */
-export type RiotStartBundles = { position: string | null; bundles: number[][] }[]
+/**
+ * Départs de la boutique du jeu : par carte et mode (absents : Faille, CLASSIC), par poste (null :
+ * tous), listes d'identifiants d'objets.
+ */
+export type RiotStartBundles = {
+  position: string | null
+  map?: number
+  mode?: string
+  bundles: number[][]
+}[]
 
 export interface RawPostGame {
   gameId: number
@@ -272,17 +302,27 @@ export interface TactiqueApi {
   onLcuStatus: (cb: (status: LcuStatus) => void) => () => void
   onLiveUpdate: (cb: (data: LiveGameData | null) => void) => () => void
   onTogglePin: (cb: () => void) => () => void
+  /** File de la partie (mode de jeu), dès le salon. */
+  onQueueUpdate: (cb: (queue: GameQueue) => void) => () => void
   getInitialState: () => Promise<{
     status: LcuStatus
     phase: GamePhase
     draft: DraftState
+    queue: GameQueue
     lang: Lang
   }>
   /** Langue effective (réglage, ou langue du client LoL en mode auto). */
   onLangUpdate: (cb: (lang: Lang) => void) => () => void
   applyRunes: (payload: RunePagePayload) => Promise<ActionResult>
   applyItemSet: (payload: ItemSetPayload) => Promise<ActionResult>
-  getRecommendedRunes: (championId: number, position: string) => Promise<RecommendedRunePage[]>
+  getRecommendedRunes: (
+    championId: number,
+    position: string,
+    mapId?: number
+  ) => Promise<RecommendedRunePage[]>
+  /** Modes tirés au hasard : prendre un champion du banc, ou relancer (édition personnelle). */
+  swapWithBench: (championId: number) => Promise<ActionResult>
+  reroll: () => Promise<ActionResult>
   /** Départs proposés par la boutique du jeu pour ce champion (édition personnelle, sinon null). */
   getRiotStart: (alias: string) => Promise<RiotStartBundles | null>
   getChampionPool: () => Promise<ChampionPool>
