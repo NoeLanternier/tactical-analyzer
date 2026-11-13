@@ -388,25 +388,27 @@ function ReportView({ r, version }: { r: GameReport; version: string }): ReactEl
           </div>
         )}
         <p className="mt-2 text-[10px] text-slate-500">
-          {r.benchSource !== 'défaut' && isMode(r.role)
-            ? tr(
-                `Repères : moyennes des joueurs du patch (${roleLabel(r.role)}).`,
-                `Benchmarks: averages of players this patch (${roleLabel(r.role)}).`
-              )
-            : r.benchSource === 'master'
+          {r.benchNote
+            ? tr(`Repères : ${r.benchNote}.`, `Benchmarks: ${r.benchNote}.`)
+            : r.benchSource !== 'défaut' && isMode(r.role)
               ? tr(
-                  `Repères : moyennes des joueurs Master+ du patch (${roleLabel(r.role)}).`,
-                  `Benchmarks: averages of Master+ players this patch (${roleLabel(r.role)}).`
+                  `Repères : moyennes des joueurs du patch (${roleLabel(r.role)}).`,
+                  `Benchmarks: averages of players this patch (${roleLabel(r.role)}).`
                 )
-              : r.benchSource === 'gold'
+              : r.benchSource === 'master'
                 ? tr(
-                    `Repères : moyennes des joueurs Or à Émeraude du patch (${roleLabel(r.role)}).`,
-                    `Benchmarks: averages of Gold to Emerald players this patch (${roleLabel(r.role)}).`
+                    `Repères : moyennes des joueurs Master+ du patch (${roleLabel(r.role)}).`,
+                    `Benchmarks: averages of Master+ players this patch (${roleLabel(r.role)}).`
                   )
-                : tr(
-                    'Repères par défaut (les chiffres Master+ arrivent avec la méta distante).',
-                    'Default benchmarks (Master+ numbers come with the remote meta).'
-                  )}
+                : r.benchSource === 'gold'
+                  ? tr(
+                      `Repères : moyennes des joueurs Or à Émeraude du patch (${roleLabel(r.role)}).`,
+                      `Benchmarks: averages of Gold to Emerald players this patch (${roleLabel(r.role)}).`
+                    )
+                  : tr(
+                      'Repères par défaut (les chiffres Master+ arrivent avec la méta distante).',
+                      'Default benchmarks (Master+ numbers come with the remote meta).'
+                    )}
         </p>
       </Card>
     </>

@@ -8,19 +8,21 @@ ARAM, ARAM: Mayhem and rotating modes (URF, ARURF, One for All…).
   composition, your mastery and your own results), and the usual early game of the enemy jungler.
 - **ARAM and other all-random modes**: your champion and the bench champions ranked for the mode, your
   allies and your mastery (no bans and no direct opponent in these modes). The app never swaps or
-  rerolls for you. **ARAM: Mayhem**: suggested augments for your champion by rarity, shown before the
-  game only.
+  rerolls for you. **ARAM: Mayhem**: Riot keeps this mode's games private, so the app uses the ARAM
+  builds (same map, same items) without a rune page.
 - **Runes and items**: a rune page and an item order adapted to the enemy team, sent to the client as
   the app's own rune page and item set. During the game, the suggested build keeps adapting to the
   enemy items and to your inventory (build suggestions only).
 - **Post-game review**: farm, gold and level against your direct opponent, build compared with the
   suggestion at each purchase, deaths, objectives and vision, against benchmarks of your role and rank
   (in ARAM and the other modes: damage and gold per minute, damage share, deaths and build, against
-  benchmarks of the mode).
+  benchmarks of the mode; in ARAM: Mayhem, ARAM benchmarks scaled to the players of your own Mayhem
+  games).
 
 Statistics come from a nightly job ([tactique-meta](https://github.com/NoeLanternier/tactique-meta))
-that reads ranked solo games of Master+ and Gold to Emerald players, and the ARAM, ARAM: Mayhem and
-rotating-mode games of the same players, through the official Riot API (League-V4, Match-V5) and publishes aggregated, anonymous statistics. The Riot API key is only used by
+that reads ranked solo games of Master+ and Gold to Emerald players, and the ARAM and rotating-mode
+games of those players and of the players they meet in these modes (ARAM: Mayhem games are not
+available in the Riot API), through the official Riot API (League-V4, Match-V5) and publishes aggregated, anonymous statistics. The Riot API key is only used by
 that job (GitHub Actions secret); this app never contains or uses an API key.
 
 ## Riot policies
@@ -35,7 +37,8 @@ This edition follows the [Riot Games third-party policies](https://developer.rio
 - Only information that players can see in the client or the game is used; no hidden information
   about other players.
 - In ARAM, champion select only shows a ranking of your champion and the bench; swapping and rerolling
-  stay manual. ARAM: Mayhem augment suggestions are never shown during the game.
+  stay manual. ARAM: Mayhem augments are not ranked or suggested: Riot keeps the mode's game data
+  private.
 - Free, no ads, no paid feature.
 
 The source of truth for the edition is `src/shared/edition.ts` (`RIOT_COMPLIANT = true`).

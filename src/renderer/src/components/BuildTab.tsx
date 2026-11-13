@@ -14,7 +14,7 @@ import { RIOT_COMPLIANT } from '../../../shared/edition'
 import {
   AUGMENT_LEVELS,
   RARITY_ORDER,
-  augmentAdvice,
+  augmentDesc,
   augmentIconUrl,
   augmentName,
   type AugmentPick,
@@ -52,13 +52,15 @@ const RARITY_TONE: Record<Rarity, string> = {
   prismatic: 'text-fuchsia-300'
 }
 
-function AugmentChip({ p }: { p: AugmentPick }): ReactElement {
+/** Note d'un augment : écart mesuré en points, sinon simple appréciation (affinités, tes parties). */
+function scoreTone(score: number): string {
+  return score >= 0.004 ? 'text-emerald-300' : score <= -0.012 ? 'text-red-300' : 'text-slate-400'
+}
+
+function AugmentChip({ p, measured }: { p: AugmentPick; measured: boolean }): ReactElement {
   const url = augmentIconUrl(p.info)
-  const title = `${augmentName(p.info)} — ${p.lift >= 0 ? '+' : '−'}${fmtNumber(Math.abs(p.lift) * 100, 1)} pt${
-    p.winRate !== null ? ` · ${fmtPct(p.winRate, 1)}` : ''
-  } · ${fmtNumber(p.games)} ${tr('parties', 'games')}${
-    p.ownData ? '' : ` (${tr('tous champions', 'all champions')})`
-  }`
+  const desc = augmentDesc(p.info)
+  const title = [augmentName(p.info), desc, ...p.reasons].filter(Boolean).join('\n')
   return (
     <span
       title={title}
@@ -66,29 +68,36 @@ function AugmentChip({ p }: { p: AugmentPick }): ReactElement {
     >
       {url && <img src={url} alt="" className="h-4 w-4" />}
       <span className="max-w-[110px] truncate">{augmentName(p.info)}</span>
-      <span className={p.lift >= 0 ? 'text-emerald-300' : 'text-red-300'}>
-        {p.lift >= 0 ? '+' : '−'}
-        {fmtNumber(Math.abs(p.lift) * 100, 1)}
-      </span>
+      {measured ? (
+        <span className={p.lift >= 0 ? 'text-emerald-300' : 'text-red-300'}>
+          {p.lift >= 0 ? '+' : '−'}
+          {fmtNumber(Math.abs(p.lift) * 100, 1)}
+        </span>
+      ) : (
+        <span className={scoreTone(p.score)}>{p.score >= 0 ? '▲' : '▼'}</span>
+      )}
     </span>
   )
 }
 
 /**
  * ARAM Mayhem : augments conseillés pour ce champion, par rareté (le jeu propose trois augments
- * d'une même rareté à chaque palier). Édition publique : avant la partie seulement.
+ * d'une même rareté à chaque palier). Statistiques collectées s'il y en a ; sinon (Riot ne publie
+ * pas les parties de ce mode) : ce qu'ils renforcent comparé au build, et tes parties. Édition
+ * publique : seulement avec des statistiques collectées, avant la partie.
  */
 function AugmentCard({ t, inGame }: { t: TactiqueState; inGame: boolean }): ReactElement | null {
   const mode = isMode(t.role) ? MODES[t.role] : null
   if (!mode || !(t.catalog.features?.augments ?? mode.augments)) return null
   // En partie : la saisie des augments proposés prend le relais (édition personnelle).
   if (inGame) return null
-  const advice = augmentAdvice(t.catalog, t.genericBuild ? null : t.build)
+  const advice = t.augments.advice
+  if (RIOT_COMPLIANT && !advice?.measured) return null
   return (
     <Card
       title={tr('Augments conseillés', 'Suggested augments')}
       right={
-        advice?.games ? (
+        advice?.measured && advice.games ? (
           <span className="text-[10px] text-slate-400">
             {fmtNumber(advice.games)} {tr('parties', 'games')}
           </span>
@@ -98,8 +107,8 @@ function AugmentCard({ t, inGame }: { t: TactiqueState; inGame: boolean }): Reac
       {!advice ? (
         <p className="text-[11px] text-slate-400">
           {tr(
-            'Pas encore assez de parties collectées pour classer les augments.',
-            'Not enough collected games yet to rank augments.'
+            'Liste des augments pas encore disponible (prochaine collecte).',
+            'Augment list not available yet (next collection).'
           )}
         </p>
       ) : (
@@ -114,14 +123,14 @@ function AugmentCard({ t, inGame }: { t: TactiqueState; inGame: boolean }): Reac
                 </div>
                 <div className="flex flex-wrap gap-1">
                   {best.map((p) => (
-                    <AugmentChip key={p.info.id} p={p} />
+                    <AugmentChip key={p.info.id} p={p} measured={advice.measured} />
                   ))}
                 </div>
                 {avoid.length > 0 && (
                   <div className="mt-1 flex flex-wrap items-center gap-1">
                     <span className="text-[9px] text-slate-500">{tr('À éviter', 'Avoid')}</span>
                     {avoid.map((p) => (
-                      <AugmentChip key={p.info.id} p={p} />
+                      <AugmentChip key={p.info.id} p={p} measured={advice.measured} />
                     ))}
                   </div>
                 )}
@@ -129,10 +138,15 @@ function AugmentCard({ t, inGame }: { t: TactiqueState; inGame: boolean }): Reac
             )
           })}
           <p className="text-[9px] leading-snug text-slate-500">
-            {tr(
-              'Écart de victoire des joueurs qui l’ont pris avec ce champion, par rapport aux autres augments (lissé).',
-              'Win-rate gap of players who took it with this champion, versus other augments (smoothed).'
-            )}
+            {advice.measured
+              ? tr(
+                  'Écart de victoire des joueurs qui l’ont pris avec ce champion, par rapport aux autres augments (lissé).',
+                  'Win-rate gap of players who took it with this champion, versus other augments (smoothed).'
+                )
+              : tr(
+                  'Riot ne publie pas les parties de ce mode : augments classés selon ce qu’ils renforcent comparé au build de ton champion, et selon tes parties. Survole un augment pour le détail.',
+                  'Riot does not publish this mode’s games: augments ranked by what they boost compared with your champion’s build, and by your games. Hover an augment for details.'
+                )}
           </p>
         </div>
       )}
@@ -234,6 +248,7 @@ function AugmentPicker({ t }: { t: TactiqueState }): ReactElement | null {
                 <button
                   key={a.id}
                   type="button"
+                  title={augmentDesc(a) || undefined}
                   onClick={() => toggle(a.id)}
                   className={`flex items-center gap-1 rounded px-1 py-0.5 text-left text-[10px] ${on ? 'bg-lolblue/25 text-white ring-1 ring-lolblue/60' : 'bg-white/5 text-slate-300 hover:bg-white/10'}`}
                 >
@@ -252,6 +267,7 @@ function AugmentPicker({ t }: { t: TactiqueState }): ReactElement | null {
                   </span>
                   <div className="min-w-0 flex-1">
                     <div
+                      title={augmentDesc(o.pick.info) || undefined}
                       className={`truncate text-xs font-semibold ${o.rank === 1 ? 'text-gold' : 'text-slate-100'}`}
                     >
                       {augmentName(o.pick.info)}
@@ -260,12 +276,14 @@ function AugmentPicker({ t }: { t: TactiqueState }): ReactElement | null {
                       {o.reasons.join(' · ')}
                     </div>
                   </div>
-                  <span
-                    className={`pt-0.5 text-[11px] tabular-nums ${o.score >= 0 ? 'text-emerald-300' : 'text-red-300'}`}
-                  >
-                    {o.score >= 0 ? '+' : '−'}
-                    {fmtNumber(Math.abs(o.score) * 100, 1)}
-                  </span>
+                  {o.pick.games > 0 && (
+                    <span
+                      className={`pt-0.5 text-[11px] tabular-nums ${o.score >= 0 ? 'text-emerald-300' : 'text-red-300'}`}
+                    >
+                      {o.score >= 0 ? '+' : '−'}
+                      {fmtNumber(Math.abs(o.score) * 100, 1)}
+                    </span>
+                  )}
                   <button
                     type="button"
                     onClick={() => t.augments.choose(o.pick.info.id)}

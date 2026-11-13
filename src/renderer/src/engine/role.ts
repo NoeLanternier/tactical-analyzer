@@ -82,16 +82,26 @@ export function detectRole(opts: {
 
 /**
  * URL de la méta d'un poste ou d'un mode, à côté de meta.json (null pour une URL personnalisée).
- * Les modes n'ont qu'un niveau de données (joueurs de tous rangs) : pas de méta Or.
+ * Les modes n'ont qu'un niveau de données (joueurs de tous rangs) : pas de méta Or. Mode privé
+ * (parties non publiées par Riot) : la méta du mode dont il reprend la carte (ARAM Mayhem → ARAM).
  */
 export function roleMetaUrl(metaUrl: string, role: Role, gold: boolean): string | null {
   if (isMode(role)) {
     if (gold || !/\/meta\.json$/.test(metaUrl)) return null
-    return metaUrl.replace(/meta\.json$/, `meta-${role}.json`)
+    return metaUrl.replace(/meta\.json$/, `meta-${MODES[role].metaFrom ?? role}.json`)
   }
   if (!/\/meta\.json$/.test(metaUrl)) return role === 'jungle' && !gold ? metaUrl : null
   const name = `meta${gold ? '-gold' : ''}${role === 'jungle' ? '' : `-${role}`}.json`
   return metaUrl.replace(/meta\.json$/, name)
+}
+
+/**
+ * Augments des modes (données du jeu publiées par la collecte : noms, descriptions, ce qu'ils
+ * renforcent), à côté de meta.json. Null : mode sans augments ou URL personnalisée.
+ */
+export function augmentsUrl(metaUrl: string, role: Role): string | null {
+  if (!isMode(role) || !MODES[role].augments || !/\/meta\.json$/.test(metaUrl)) return null
+  return metaUrl.replace(/meta\.json$/, 'meta-augments.json')
 }
 
 /** Objets de départ habituels quand la méta n'en donne pas (hors jungle). */

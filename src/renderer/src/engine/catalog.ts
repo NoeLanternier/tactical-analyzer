@@ -20,6 +20,7 @@ import { profileOf, type MeasuredProfiles } from './threat'
 import { tr } from '../../../shared/i18n'
 import { parseTuning, type EngineTuning } from './tuning'
 import { parseFit, parsePriors, type Priors, type TeamFit } from './stats'
+import { MODES, isModeKey, type ModeKey } from '../../../shared/modes'
 
 // Catalogue des builds : base tactique + mise à jour distante éventuelle + build générique pour
 // tout champion absent de la base (nouveau champion, pick original...).
@@ -54,6 +55,37 @@ export type DuelPeriod = 'early' | 'mid' | 'late'
 const DUEL_PERIODS: DuelPeriod[] = ['early', 'mid', 'late']
 
 /** Repères d'un jungler Master+ (moyennes du patch, méta distante). */
+/**
+ * Ce que renforce un augment, d'après son texte (meta-augments.json) : puissance, dégâts
+ * d'attaque, attaques de base, vitesse d'attaque, critiques, effets à l'impact, compétences,
+ * accélération, ultime, résistances et PV, soins, boucliers, alliés, vol de vie, mana, vitesse,
+ * contrôles, or, sorts d'invocateur, corps à corps, distance.
+ */
+export const AUGMENT_TAGS = [
+  'ap',
+  'ad',
+  'attack',
+  'as',
+  'crit',
+  'onhit',
+  'ability',
+  'haste',
+  'ult',
+  'tank',
+  'heal',
+  'shield',
+  'ally',
+  'vamp',
+  'mana',
+  'ms',
+  'cc',
+  'gold',
+  'summoner',
+  'melee',
+  'ranged'
+] as const
+export type AugmentTag = (typeof AUGMENT_TAGS)[number]
+
 /** Augment d'ARAM Mayhem (données du jeu, publiées par la collecte). */
 export interface AugmentInfo {
   id: number
@@ -62,6 +94,15 @@ export interface AugmentInfo {
   rarity: 'silver' | 'gold' | 'prismatic'
   /** Chemin de l'icône dans les données du jeu (CommunityDragon). */
   icon: string
+  /** Description (données du jeu, valeurs remplacées par « x ») ; absente si inconnue. */
+  desc?: string
+  descFr?: string
+  /** Ce que l'augment renforce, de 0 à 1. */
+  tags?: Partial<Record<AugmentTag, number>>
+  /** Objet amélioré (« Upgrade Infinity Edge » → 'Infinity Edge'). */
+  upgrade?: string
+  /** Objets finaux cités dans la description (quêtes « Possède … »). */
+  items?: string[]
   /** Tous champions confondus : parties, taux de victoire, écart estimé (lissé). */
   games?: number
   winRate?: number
@@ -133,6 +174,13 @@ export interface Catalog {
   augmentItems?: Record<number, { item: string; games: number; uplift: number; lift: number }[]>
   /** Augments pris ensemble : [parties, écart de taux de victoire] pour 'a|b' (a < b, en texte). */
   augmentPairs?: Record<string, [number, number]>
+  /**
+   * Méta empruntée à un autre mode (mode privé : ARAM Mayhem joue avec la méta ARAM, Riot ne
+   * publiant pas ses parties).
+   */
+  borrowedFrom?: ModeKey
+  /** Source des repères du bilan quand ce ne sont pas ceux de la méta : [français, anglais]. */
+  benchNote?: [string, string]
   /**
    * Champions vus dans l'équipe adverse, tous postes confondus : [parties, taux de victoire de
    * leur équipe, part des parties où ils sont bannis]. `threatGames` : parties de référence.
@@ -349,12 +397,25 @@ function parseAugmentInfo(raw: any): Catalog['augmentInfo'] {
   for (const [k, a] of Object.entries<any>(raw)) {
     const id = Number(k)
     if (!(id > 0) || typeof a?.name !== 'string' || !RARITIES.includes(a.rarity)) continue
+    const tags: Partial<Record<AugmentTag, number>> = {}
+    for (const t of AUGMENT_TAGS) {
+      const w = num(a.tags?.[t])
+      if (w !== null && w > 0) tags[t] = Math.min(1, w)
+    }
+    const items = Array.isArray(a.items)
+      ? a.items.filter((x: unknown): x is string => typeof x === 'string' && !!x).slice(0, 4)
+      : []
     out[id] = {
       id,
       name: a.name,
       nameFr: typeof a.nameFr === 'string' && a.nameFr ? a.nameFr : a.name,
       rarity: a.rarity,
       icon: typeof a.icon === 'string' ? a.icon : '',
+      ...(typeof a.desc === 'string' && a.desc ? { desc: a.desc } : {}),
+      ...(typeof a.descFr === 'string' && a.descFr ? { descFr: a.descFr } : {}),
+      ...(Object.keys(tags).length ? { tags } : {}),
+      ...(typeof a.upgrade === 'string' && a.upgrade ? { upgrade: a.upgrade } : {}),
+      ...(items.length ? { items } : {}),
       ...(num(a.games) !== null && num(a.winRate) !== null && num(a.lift) !== null
         ? { games: a.games, winRate: a.winRate, lift: Math.max(-0.1, Math.min(0.1, a.lift)) }
         : {})
@@ -395,6 +456,55 @@ function parseAugmentPairs(raw: any): Catalog['augmentPairs'] {
     if (/^\d+\|\d+$/.test(k) && Array.isArray(v) && num(v[0]) !== null && num(v[1]) !== null)
       out[k] = [v[0], Math.max(-0.1, Math.min(0.1, v[1]))]
   return Object.keys(out).length ? out : undefined
+}
+
+/**
+ * Catalogue adapté au mode joué. Mode privé (ARAM Mayhem) : la méta empruntée (ARAM) avec les
+ * runes et augments du mode ; augments du mode (meta-augments.json) : noms, descriptions et ce
+ * qu'ils renforcent, en gardant les statistiques de la méta du mode s'il y en a.
+ */
+export function forMode(catalog: Catalog, role: string, augmentsRaw?: unknown): Catalog {
+  if (!isModeKey(role)) return catalog
+  const info = MODES[role]
+  const file = info.augments ? parseAugmentInfo((augmentsRaw as any)?.augmentInfo) : undefined
+  const listed = new Set<number>(
+    (info.gameModes.flatMap((g) => (augmentsRaw as any)?.modes?.[g] ?? []) as unknown[])
+      .map(Number)
+      .filter((x) => x > 0)
+  )
+  let augmentInfo = catalog.augmentInfo
+  if (file) {
+    // Augments de ce mode seulement (listes du jeu), avec les statistiques de la méta s'il y en a.
+    augmentInfo = {}
+    for (const [k, a] of Object.entries(file)) {
+      const id = Number(k)
+      if (listed.size && !listed.has(id)) continue
+      const stats = catalog.augmentInfo?.[id]
+      augmentInfo[id] =
+        stats?.lift !== undefined
+          ? { ...a, games: stats.games, winRate: stats.winRate, lift: stats.lift }
+          : a
+    }
+  }
+  const borrowed = !!info.metaFrom
+  if (!borrowed && augmentInfo === catalog.augmentInfo) return catalog
+  return {
+    ...catalog,
+    augmentInfo,
+    ...(borrowed
+      ? {
+          borrowedFrom: info.metaFrom,
+          features: { runes: info.runes, augments: info.augments },
+          benchNote: [
+            `joueurs ${MODES[info.metaFrom!].name[0]} du patch (les parties ${info.name[0]} ne sont pas publiées par Riot)`,
+            `${MODES[info.metaFrom!].name[1]} players this patch (${info.name[1]} games are not published by Riot)`
+          ] as [string, string],
+          // Statistiques d'augments d'une autre méta : sans objet.
+          augmentItems: undefined,
+          augmentPairs: undefined
+        }
+      : {})
+  }
 }
 
 function parseAugmentStats(raw: any): JunglerBuild['augments'] {

@@ -1,9 +1,13 @@
 // Modes de jeu pris en charge en plus de la Faille de l'invocateur (parties classées et normales).
 //
-// Chaque mode a sa méta (meta-aram.json, meta-mayhem.json…), ses builds, ses statistiques et ses
+// Chaque mode a sa méta (meta-aram.json, meta-urf.json…), ses builds, ses statistiques et ses
 // repères, comme un poste de la Faille. Les files (identifiants de queue) viennent des données du
 // client (queues.json) ; le mode du jeu (« ARAM », « KIWI »…) sert de secours quand la file est
 // inconnue (application lancée en pleine partie sans le client).
+//
+// Modes privés : Riot ne publie pas leurs parties (ARAM Mayhem et ses variantes, Mêlée), il n'y a
+// donc pas de méta collectée. ARAM Mayhem reprend la méta ARAM (même carte, mêmes objets) ; ses
+// augments sont classés d'après ce qu'ils renforcent et les parties du joueur.
 
 export type ModeKey = 'aram' | 'mayhem' | 'mayhem-classic' | 'arurf' | 'urf' | 'ofa' | 'brawl'
 
@@ -25,10 +29,14 @@ export interface ModeInfo {
   wards: boolean
   /** Augments à choisir pendant la partie (ARAM Mayhem). */
   augments: boolean
-  /** Runes utilisables (désactivées en ARAM Mayhem, vérifié sur les données de la collecte). */
+  /** Runes utilisables (désactivées en ARAM Mayhem : vérifié en partie et dans l'historique). */
   runes: boolean
   /** Mode temporaire : présent seulement certaines semaines. */
   temporary: boolean
+  /** Parties non publiées par Riot dans son API : pas de méta collectée pour ce mode. */
+  privateData: boolean
+  /** Méta d'un autre mode utilisée à la place (mode privé joué sur la même carte). */
+  metaFrom?: ModeKey
   /** Or de départ. */
   startGold: number
 }
@@ -46,7 +54,8 @@ export const MODES: Record<ModeKey, ModeInfo> = {
     augments: false,
     runes: true,
     temporary: false,
-    startGold: 1400
+    startGold: 1400,
+    privateData: false
   },
   mayhem: {
     key: 'mayhem',
@@ -60,7 +69,9 @@ export const MODES: Record<ModeKey, ModeInfo> = {
     augments: true,
     runes: false,
     temporary: false,
-    startGold: 1400
+    startGold: 1400,
+    privateData: true,
+    metaFrom: 'aram'
   },
   'mayhem-classic': {
     key: 'mayhem-classic',
@@ -74,7 +85,9 @@ export const MODES: Record<ModeKey, ModeInfo> = {
     augments: true,
     runes: true,
     temporary: true,
-    startGold: 1400
+    startGold: 1400,
+    privateData: true,
+    metaFrom: 'aram'
   },
   arurf: {
     key: 'arurf',
@@ -88,7 +101,8 @@ export const MODES: Record<ModeKey, ModeInfo> = {
     augments: false,
     runes: true,
     temporary: true,
-    startGold: 500
+    startGold: 500,
+    privateData: false
   },
   urf: {
     key: 'urf',
@@ -102,7 +116,8 @@ export const MODES: Record<ModeKey, ModeInfo> = {
     augments: false,
     runes: true,
     temporary: true,
-    startGold: 500
+    startGold: 500,
+    privateData: false
   },
   ofa: {
     key: 'ofa',
@@ -116,7 +131,8 @@ export const MODES: Record<ModeKey, ModeInfo> = {
     augments: false,
     runes: true,
     temporary: true,
-    startGold: 500
+    startGold: 500,
+    privateData: false
   },
   brawl: {
     key: 'brawl',
@@ -130,7 +146,8 @@ export const MODES: Record<ModeKey, ModeInfo> = {
     augments: false,
     runes: true,
     temporary: true,
-    startGold: 500
+    startGold: 500,
+    privateData: true
   }
 }
 

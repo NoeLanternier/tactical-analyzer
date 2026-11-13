@@ -724,6 +724,8 @@ export interface GameReport {
   legendaries: ItemInfo[]
   bench: Benchmark
   benchSource: 'master' | 'gold' | 'défaut'
+  /** Source des repères quand ce ne sont pas ceux de la méta (mode privé : tes parties…). */
+  benchNote: string | null
   hasTimeline: boolean
   /** Achats connus avec leur minutage (journal de partie). */
   hasItems: boolean
@@ -1055,7 +1057,12 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
       : catalog.statsBracket === 'gold'
         ? 'gold'
         : 'master'
-  benchLabel = benchSource === 'gold' ? tr('Or à Émeraude', 'Gold to Emerald') : 'Master+'
+  benchLabel =
+    benchSource !== 'défaut' && catalog.benchNote
+      ? tr(...catalog.benchNote)
+      : benchSource === 'gold'
+        ? tr('Or à Émeraude', 'Gold to Emerald')
+        : 'Master+'
   const findings: Finding[] = []
   const push = (f: Finding): void => {
     findings.push(f)
@@ -1793,6 +1800,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
     legendaries,
     bench,
     benchSource,
+    benchNote: benchSource !== 'défaut' && catalog.benchNote ? tr(...catalog.benchNote) : null,
     hasTimeline,
     hasItems,
     augments: (me.augments ?? []).map((id) => {

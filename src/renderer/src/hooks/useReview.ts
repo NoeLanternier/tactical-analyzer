@@ -4,7 +4,8 @@ import type { Catalog } from '../engine/catalog'
 import { champFromLive, type GameData } from '../engine/gameData'
 import { tr, type Lang } from '../../../shared/i18n'
 import { isMode, type Role } from '../engine/role'
-import { modeOf } from '../../../shared/modes'
+import { MODES, modeOf, type ModeKey } from '../../../shared/modes'
+import { modeData as computeModeData, withModeBench, type ModeData } from '../engine/modeData'
 import { useRoleCatalogs } from './useRemoteMeta'
 import { computeLearning, type Learning } from '../engine/learning'
 import {
@@ -26,6 +27,11 @@ export type ReviewStatus =
 export interface ReviewState {
   reports: GameReport[]
   learning: Learning
+  /**
+   * Mode privé joué (ARAM Mayhem…) : tes parties de ce mode (les dix joueurs de chacune), pour les
+   * repères et les augments. Null hors de ces modes.
+   */
+  modeData: ModeData | null
   status: ReviewStatus
   /** Bilan de la partie qui vient de se terminer, pas encore consulté. */
   fresh: number | null
@@ -234,15 +240,26 @@ export function useReview(
   )
   const others = useRoleCatalogs(otherRoles, meta.url, meta.level)
 
+  // Modes privés (parties non publiées par Riot) : repères et augments tirés de tes parties.
+  const privateData = useMemo(() => {
+    const m = new Map<ModeKey, ModeData>()
+    for (const f of facts) {
+      const r = f.role
+      if (isMode(r) && MODES[r].privateData && !m.has(r)) m.set(r, computeModeData(facts, r))
+    }
+    return m
+  }, [facts])
+
   // Analyse de toutes les parties enregistrées avec le moteur actuel.
   const reports = useMemo(() => {
     if (!gd) return []
     const out: GameReport[] = []
     for (const f of facts.slice(0, MAX_ANALYZED)) {
       const r = f.role ?? 'jungle'
-      const cat = r === role ? catalog : others.get(r)
+      const base = r === role ? catalog : others.get(r)
       // Méta de ce poste pas encore chargée : la partie sera analysée dès qu'elle arrive.
-      if (!cat) continue
+      if (!base) continue
+      const cat = isMode(r) ? withModeBench(base, privateData.get(r) ?? null) : base
       try {
         out.push(analyzeGame(gd, cat, f))
       } catch {
@@ -251,7 +268,7 @@ export function useReview(
     }
     return out
     // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
-  }, [gd, catalog, role, others, facts, lang])
+  }, [gd, catalog, role, others, facts, privateData, lang])
 
   // Apprentissage : parties de la Faille entre elles (tous postes), et chaque mode à part (un
   // objet ou une erreur en ARAM ne dit rien de la Faille, et inversement).
@@ -260,9 +277,18 @@ export function useReview(
     return computeLearning(reports.filter((r) => (isMode(r.role) ? r.role : null) === mode))
   }, [reports, role])
 
+  const modeData = useMemo(
+    () =>
+      isMode(role) && MODES[role].privateData
+        ? (privateData.get(role) ?? computeModeData([], role))
+        : null,
+    [privateData, role]
+  )
+
   return {
     reports,
     learning,
+    modeData,
     status,
     fresh,
     markSeen: () => setFresh(null),

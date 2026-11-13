@@ -28,6 +28,7 @@ import {
 } from '../engine/choices'
 import {
   defaultCatalog,
+  forMode,
   getBuild,
   roleBaseCatalog,
   mergeOverride,
@@ -50,12 +51,20 @@ import { chooseStart, type StartPlan } from '../engine/start'
 import { analyzeThreat, findMe, type ThreatProfile } from '../engine/threat'
 import { META_PATCH, type JunglerBuild } from '../data/junglers'
 import { liveNudges, type Nudge } from '../engine/learning'
-import { augmentItemBonus, rankOffered, type OfferedAugment } from '../engine/augments'
+import {
+  augmentAdvice,
+  augmentContext,
+  augmentItemBonus,
+  rankOffered,
+  type AugmentAdvice,
+  type OfferedAugment
+} from '../engine/augments'
 import { DEFAULT_BENCH_BY_ROLE } from '../engine/postgame'
 import { useReview, type ReviewState } from './useReview'
 import { useRemoteMeta } from './useRemoteMeta'
 import { MODES, modeOf, type ModeKey } from '../../../shared/modes'
 import {
+  augmentsUrl,
   clientPosition,
   detectRole,
   isMode,
@@ -149,6 +158,8 @@ export interface AugmentSelection {
   offered: number[]
   chosen: number[]
   ranked: OfferedAugment[]
+  /** Augments conseillés pour ce champion avant la partie, par rareté (null : pas d'augments). */
+  advice: AugmentAdvice | null
   setOffered: (ids: number[]) => void
   choose: (id: number) => void
   remove: (id: number) => void
@@ -331,10 +342,15 @@ export function useTactique(): TactiqueState {
   const goldUrl = metaLevel === 'gold' ? roleMetaUrl(settings.metaUrl, role, true) : null
   const gold = useRemoteMeta(goldUrl, jungle)
   const goldReady = !!gold?.catalog && (gold.info?.sampleGames ?? 0) >= GOLD_MIN_GAMES
+  // Augments du mode (données du jeu : noms, descriptions, ce qu'ils renforcent).
+  const augUrl = settings.metaUrl ? augmentsUrl(settings.metaUrl, role) : null
+  const augFile = useRemoteMeta(augUrl, false)
   const catalog = useMemo(() => {
     const base = master?.catalog ?? (jungle ? defaultCatalog() : roleBaseCatalog())
-    return goldReady && gold ? mergeOverride(base, gold.data).catalog : base
-  }, [master, gold, goldReady, jungle])
+    const merged = goldReady && gold ? mergeOverride(base, gold.data).catalog : base
+    // Mode privé (ARAM Mayhem) : méta ARAM, runes et augments du mode.
+    return forMode(merged, role, augFile?.data)
+  }, [master, gold, goldReady, jungle, role, augFile])
   // Méta vieille de plus de 2 jours : la collecte nocturne a sans doute échoué.
   // (modes temporaires : la méta date de leur dernière présence, c'est normal.)
   const temporary = !!modeInfo?.temporary
@@ -349,6 +365,13 @@ export function useTactique(): TactiqueState {
         `${roleLabel(role)} — méta de ce mode pas encore disponible (${master.error ?? '?'}) : builds génériques en attendant la prochaine collecte.`,
         `${roleLabel(role)} — no meta for this mode yet (${master.error ?? '?'}): generic builds until the next collection.`
       )
+    // Mode privé : Riot ne publie pas ses parties, la méta est celle du mode de la même carte.
+    const borrowed = catalog.borrowedFrom
+      ? tr(
+          `Riot ne publie pas les parties de ce mode : builds ${roleLabel(catalog.borrowedFrom)} (même carte, mêmes objets, sans les runes)${catalog.augmentInfo && !RIOT_COMPLIANT ? ', augments classés selon ton champion et tes parties' : ''}. `,
+          `Riot does not publish this mode's games: ${roleLabel(catalog.borrowedFrom)} builds (same map, same items, no runes)${catalog.augmentInfo && !RIOT_COMPLIANT ? ', augments ranked for your champion and your games' : ''}. `
+        )
+      : ''
     if (master.error || !master.catalog || !master.info)
       return tr(
         `URL de méta inaccessible (${master.error}) : base intégrée utilisée.`,
@@ -391,6 +414,7 @@ export function useTactique(): TactiqueState {
       : ''
     return (
       `${roleLabel(role)} — ` +
+      borrowed +
       (lang === 'en'
         ? `Remote meta patch ${patch}: ${i.accepted} builds` +
           (i.sampleGames ? ` computed from ${fmtNumber(i.sampleGames)} games` : '') +
@@ -679,15 +703,40 @@ export function useTactique(): TactiqueState {
     setChosen({ champ: champName, ids })
     if (champName) saveChosen(champName, ids)
   }
+  // Classement des augments : ce qu'ils renforcent comparé au build et au profil du champion, et
+  // tes parties dans ce mode (apprentissage personnel).
+  const modeData = review.modeData
+  const augCtx = useMemo(
+    () =>
+      modeInfo?.augments && catalog.augmentInfo
+        ? augmentContext(
+            gd,
+            champ,
+            genericBuild ? null : baseBuild,
+            catalog.profiles,
+            settings.personalLearning ? modeData : null
+          )
+        : undefined,
+    [modeInfo, catalog, gd, champ, genericBuild, baseBuild, settings.personalLearning, modeData]
+  )
   const ranked = useMemo(
-    () => rankOffered(catalog, genericBuild ? null : baseBuild, offered, chosenIds),
+    () => rankOffered(catalog, genericBuild ? null : baseBuild, offered, chosenIds, augCtx),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
-    [catalog, baseBuild, genericBuild, offered, chosenIds, lang]
+    [catalog, baseBuild, genericBuild, offered, chosenIds, augCtx, lang]
+  )
+  const augAdvice = useMemo(
+    () =>
+      modeInfo?.augments
+        ? augmentAdvice(catalog, genericBuild ? null : baseBuild, 5, augCtx)
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
+    [modeInfo, catalog, baseBuild, genericBuild, augCtx, lang]
   )
   // Objets : bonus appris de tes parties, et ceux qui vont avec tes augments.
   const personal = useMemo(
-    () => augmentItemBonus(catalog, chosenIds, learned),
-    [catalog, chosenIds, learned]
+    () => augmentItemBonus(catalog, chosenIds, learned, gd),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
+    [catalog, chosenIds, learned, gd, lang]
   )
 
   const plan = useMemo(
@@ -831,6 +880,7 @@ export function useTactique(): TactiqueState {
       offered,
       chosen: chosenIds,
       ranked,
+      advice: augAdvice,
       setOffered: (ids) => setOffered(ids.slice(0, 3)),
       choose: (id) => {
         if (!chosenIds.includes(id)) updateChosen([...chosenIds, id].slice(-6))

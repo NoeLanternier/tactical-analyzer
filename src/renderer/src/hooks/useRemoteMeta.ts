@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react'
-import { defaultCatalog, mergeOverride, roleBaseCatalog, type Catalog } from '../engine/catalog'
+import {
+  defaultCatalog,
+  forMode,
+  mergeOverride,
+  roleBaseCatalog,
+  type Catalog
+} from '../engine/catalog'
 import { GOLD_MIN_GAMES } from '../engine/metaLevel'
-import { roleMetaUrl, type Role } from '../engine/role'
+import { augmentsUrl, isMode, roleMetaUrl, type Role } from '../engine/role'
 
 // Méta distante (meta.json ou meta-gold.json) : copie locale d'abord (démarrage immédiat, hors
 // ligne), puis la version en ligne au démarrage et toutes les 3 heures.
@@ -121,6 +127,8 @@ export function useRoleCatalogs(
           const merged = gold ? mergeOverride(catalog, gold) : null
           if (merged && (merged.sampleGames ?? 0) >= GOLD_MIN_GAMES) catalog = merged.catalog
         }
+        // Modes : runes et augments du mode, méta empruntée (ARAM Mayhem → ARAM).
+        if (isMode(role)) catalog = forMode(catalog, role, await load(augmentsUrl(metaUrl, role)))
         map.set(role, catalog)
       }
       if (!cancelled) setCatalogs({ key, map })
