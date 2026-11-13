@@ -3,6 +3,8 @@ import * as https from 'https'
 import type { LiveGameData, LivePlayer } from '../shared/types'
 import { RIOT_ROOT_CERT } from './riotCert'
 import { debugLog } from './logger'
+import { LiveProbe } from './liveProbe'
+import { RIOT_COMPLIANT } from '../shared/edition'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -135,11 +137,18 @@ export class LivePoller extends EventEmitter {
     super()
   }
 
+  /** Relevé des champs de l'API hors Faille (édition personnelle, voir liveProbe.ts). */
+  private probe: LiveProbe | null = RIOT_COMPLIANT
+    ? null
+    : new LiveProbe((p) => getJson(p, useFallback ? localFallbackAgent : verifiedAgent))
+
   start(): void {
     const tick = async (): Promise<void> => {
       let data: LiveGameData | null
       try {
-        data = normalize(await fetchAllGameData())
+        const raw = await fetchAllGameData()
+        data = normalize(raw)
+        if (data) this.probe?.observe(raw)
       } catch {
         data = null
       }

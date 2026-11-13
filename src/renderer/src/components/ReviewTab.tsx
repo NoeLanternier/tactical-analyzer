@@ -16,6 +16,7 @@ import { fmtNumber, fmtPct, getLang, tr } from '../../../shared/i18n'
 import type { Learning } from '../engine/learning'
 import { Card, Chip, ItemIcon, Meter } from './ui'
 import { isMode, roleLabel } from '../engine/role'
+import { augmentName } from '../engine/augments'
 import {
   BUILD_FOLLOWED,
   BUILD_IGNORED,
@@ -151,6 +152,21 @@ function ReportView({ r, version }: { r: GameReport; version: string }): ReactEl
             <div className="text-[9px] text-slate-500">{r.overall}/100</div>
           </div>
         </div>
+        {r.augments.some((a) => a.info) && (
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            <span className="text-[9px] uppercase tracking-wider text-slate-500">Augments</span>
+            {r.augments.map((a) =>
+              a.info ? (
+                <Chip key={a.id} tone={a.lift !== null && a.lift < -0.005 ? 'red' : 'blue'}>
+                  {augmentName(a.info)}
+                  {a.lift !== null
+                    ? ` ${a.lift >= 0 ? '+' : '−'}${fmtNumber(Math.abs(a.lift) * 100, 1)}`
+                    : ''}
+                </Chip>
+              ) : null
+            )}
+          </div>
+        )}
         <div className="mt-3 flex flex-col gap-1">
           {cats.map(([c, v]) => (
             <Meter

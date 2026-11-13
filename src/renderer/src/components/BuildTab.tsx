@@ -1,5 +1,5 @@
 import { Coins, LoaderCircle, TriangleAlert, Check, Info, Lightbulb } from 'lucide-react'
-import type { ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 import type { TactiqueState, SyncState } from '../hooks/useTactique'
 import { champIcon, type ItemInfo } from '../engine/gameData'
 import { norm } from '../engine/normalize'
@@ -12,6 +12,7 @@ import { isMode, roleLabel } from '../engine/role'
 import { MODES } from '../../../shared/modes'
 import { RIOT_COMPLIANT } from '../../../shared/edition'
 import {
+  AUGMENT_LEVELS,
   RARITY_ORDER,
   augmentAdvice,
   augmentIconUrl,
@@ -80,7 +81,8 @@ function AugmentChip({ p }: { p: AugmentPick }): ReactElement {
 function AugmentCard({ t, inGame }: { t: TactiqueState; inGame: boolean }): ReactElement | null {
   const mode = isMode(t.role) ? MODES[t.role] : null
   if (!mode || !(t.catalog.features?.augments ?? mode.augments)) return null
-  if (inGame && RIOT_COMPLIANT) return null
+  // En partie : la saisie des augments proposés prend le relais (édition personnelle).
+  if (inGame) return null
   const advice = augmentAdvice(t.catalog, t.genericBuild ? null : t.build)
   return (
     <Card
@@ -133,6 +135,149 @@ function AugmentCard({ t, inGame }: { t: TactiqueState; inGame: boolean }): Reac
             )}
           </p>
         </div>
+      )}
+    </Card>
+  )
+}
+
+/**
+ * ARAM Mayhem, en partie (édition personnelle) : le jeu ne donne pas les augments proposés à l'app.
+ * Tu cliques les trois proposés ; l'app les classe pour ton champion et tes augments déjà pris,
+ * puis adapte le build à celui que tu prends.
+ */
+function AugmentPicker({ t }: { t: TactiqueState }): ReactElement | null {
+  const [rarity, setRarity] = useState<Rarity>('silver')
+  const [query, setQuery] = useState('')
+  const mode = isMode(t.role) ? MODES[t.role] : null
+  const info = t.catalog.augmentInfo
+  if (!mode || RIOT_COMPLIANT || !t.live || !info) return null
+  if (!(t.catalog.features?.augments ?? mode.augments)) return null
+  const { offered, chosen, ranked } = t.augments
+  const level = t.live.activePlayer?.level ?? 1
+  const next = AUGMENT_LEVELS[chosen.length]
+  const due = next !== undefined && level >= next
+  const q = query.trim().toLowerCase()
+  const list = Object.values(info)
+    .filter((a) => a.rarity === rarity && !chosen.includes(a.id))
+    .filter(
+      (a) => !q || augmentName(a).toLowerCase().includes(q) || a.name.toLowerCase().includes(q)
+    )
+    .sort((a, b) => augmentName(a).localeCompare(augmentName(b)))
+  const toggle = (id: number): void =>
+    t.augments.setOffered(
+      offered.includes(id) ? offered.filter((x) => x !== id) : [...offered, id].slice(-3)
+    )
+  return (
+    <Card
+      title={tr('Augments', 'Augments')}
+      right={
+        <span className={`text-[10px] ${due ? 'text-gold' : 'text-slate-400'}`}>
+          {next === undefined
+            ? tr('tous choisis', 'all picked')
+            : due
+              ? tr(`palier ${chosen.length + 1} : à choisir`, `tier ${chosen.length + 1}: pick now`)
+              : tr(`prochain au niveau ${next}`, `next at level ${next}`)}
+        </span>
+      }
+    >
+      {chosen.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-1">
+          <span className="text-[9px] uppercase tracking-wider text-slate-500">
+            {tr('Pris', 'Picked')}
+          </span>
+          {chosen.map((id) =>
+            info[id] ? (
+              <button
+                key={id}
+                type="button"
+                title={tr('Retirer', 'Remove')}
+                onClick={() => t.augments.remove(id)}
+                className="rounded bg-lolblue/15 px-1 py-0.5 text-[10px] text-lolblue hover:bg-red-500/20 hover:text-red-200"
+              >
+                {augmentName(info[id])} ×
+              </button>
+            ) : null
+          )}
+        </div>
+      )}
+      {next !== undefined && (
+        <>
+          <p className="mb-1.5 text-[10px] leading-snug text-slate-500">
+            {tr(
+              'Clique les augments proposés (le jeu ne les donne pas à l’app) : ils sont classés pour ton champion et tes augments déjà pris, puis le build s’adapte à ton choix.',
+              'Click the offered augments (the game does not give them to the app): they are ranked for your champion and your picked augments, then the build adapts to your choice.'
+            )}
+          </p>
+          <div className="mb-1.5 flex items-center gap-1">
+            {RARITY_ORDER.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRarity(r)}
+                className={`rounded px-1.5 py-0.5 text-[10px] ${r === rarity ? `bg-white/15 ${RARITY_TONE[r]}` : 'text-slate-500 hover:bg-white/5'}`}
+              >
+                {tr(...RARITY_LABEL[r])}
+              </button>
+            ))}
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={tr('Rechercher…', 'Search…')}
+              className="ml-auto w-24 rounded border border-white/10 bg-slate-900 px-1.5 py-0.5 text-[10px]"
+            />
+          </div>
+          <div className="grid max-h-36 grid-cols-2 gap-1 overflow-y-auto pr-1">
+            {list.map((a) => {
+              const url = augmentIconUrl(a)
+              const on = offered.includes(a.id)
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => toggle(a.id)}
+                  className={`flex items-center gap-1 rounded px-1 py-0.5 text-left text-[10px] ${on ? 'bg-lolblue/25 text-white ring-1 ring-lolblue/60' : 'bg-white/5 text-slate-300 hover:bg-white/10'}`}
+                >
+                  {url && <img src={url} alt="" className="h-4 w-4 shrink-0" />}
+                  <span className="truncate">{augmentName(a)}</span>
+                </button>
+              )
+            })}
+          </div>
+          {ranked.length > 0 && (
+            <ol className="mt-2 flex flex-col gap-1.5 border-t border-white/5 pt-2">
+              {ranked.map((o) => (
+                <li key={o.pick.info.id} className="flex items-start gap-2">
+                  <span className="w-4 pt-0.5 text-right text-[10px] tabular-nums text-slate-500">
+                    {o.rank}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className={`truncate text-xs font-semibold ${o.rank === 1 ? 'text-gold' : 'text-slate-100'}`}
+                    >
+                      {augmentName(o.pick.info)}
+                    </div>
+                    <div className="text-[10px] leading-snug text-slate-400">
+                      {o.reasons.join(' · ')}
+                    </div>
+                  </div>
+                  <span
+                    className={`pt-0.5 text-[11px] tabular-nums ${o.score >= 0 ? 'text-emerald-300' : 'text-red-300'}`}
+                  >
+                    {o.score >= 0 ? '+' : '−'}
+                    {fmtNumber(Math.abs(o.score) * 100, 1)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => t.augments.choose(o.pick.info.id)}
+                    className="rounded bg-lolblue/20 px-1.5 py-0.5 text-[10px] text-lolblue hover:bg-lolblue/30"
+                  >
+                    {tr('Pris', 'Picked')}
+                  </button>
+                </li>
+              ))}
+            </ol>
+          )}
+        </>
       )}
     </Card>
   )
@@ -572,6 +717,7 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
 
       {inGame && <CoachCard t={t} inGame />}
 
+      <AugmentPicker t={t} />
       <AugmentCard t={t} inGame={inGame} />
 
       {/* Runes */}

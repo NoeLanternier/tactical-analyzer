@@ -1,5 +1,5 @@
 import type { GameJournal, LiveGameData, LivePlayer, RawPostGame } from '../../../shared/types'
-import { getBuild, type Benchmark, type Catalog } from './catalog'
+import { getBuild, type AugmentInfo, type Benchmark, type Catalog } from './catalog'
 import type { ChampInfo, GameData, ItemInfo } from './gameData'
 import { buildItemPlan, type ItemPlan } from './items'
 import { chooseVariant } from './variants'
@@ -727,6 +727,8 @@ export interface GameReport {
   hasTimeline: boolean
   /** Achats connus avec leur minutage (journal de partie). */
   hasItems: boolean
+  /** ARAM Mayhem : augments pris, avec leur écart estimé pour ce champion (null : inconnu). */
+  augments: { id: number; info: AugmentInfo | null; lift: number | null }[]
 }
 
 /** Repères d'un jungler Master+ (remplacés par les vrais chiffres de la méta distante). */
@@ -1792,7 +1794,12 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
     bench,
     benchSource,
     hasTimeline,
-    hasItems
+    hasItems,
+    augments: (me.augments ?? []).map((id) => {
+      const info = catalog.augmentInfo?.[id] ?? null
+      const own = champ ? catalog.builds.get(champ.id)?.augments?.find((a) => a.id === id) : null
+      return { id, info, lift: own?.lift ?? info?.lift ?? null }
+    })
   }
 }
 

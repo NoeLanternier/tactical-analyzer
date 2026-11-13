@@ -50,6 +50,7 @@ import { chooseStart, type StartPlan } from '../engine/start'
 import { analyzeThreat, findMe, type ThreatProfile } from '../engine/threat'
 import { META_PATCH, type JunglerBuild } from '../data/junglers'
 import { liveNudges, type Nudge } from '../engine/learning'
+import { augmentItemBonus, rankOffered, type OfferedAugment } from '../engine/augments'
 import { DEFAULT_BENCH_BY_ROLE } from '../engine/postgame'
 import { useReview, type ReviewState } from './useReview'
 import { useRemoteMeta } from './useRemoteMeta'
@@ -137,6 +138,49 @@ export interface TactiqueState {
   nudges: Nudge[]
   /** Alerte d'achat à la base (édition personnelle). */
   purchase: PurchaseAlert | null
+  /**
+   * ARAM Mayhem (édition personnelle) : augments proposés à ce palier (saisis dans l'overlay, le
+   * jeu ne les donne pas à l'app), classés pour ton champion, et augments déjà pris.
+   */
+  augments: AugmentSelection
+}
+
+export interface AugmentSelection {
+  offered: number[]
+  chosen: number[]
+  ranked: OfferedAugment[]
+  setOffered: (ids: number[]) => void
+  choose: (id: number) => void
+  remove: (id: number) => void
+}
+
+/**
+ * Augments pris, gardés le temps de la partie (l'app peut redémarrer en pleine partie) ; effacés à
+ * chaque nouvelle sélection des champions.
+ */
+const AUG_KEY = 'tactique-augments'
+const NO_IDS: number[] = []
+function readChosen(): { champ: string; ids: number[] } {
+  try {
+    const raw = JSON.parse(localStorage.getItem(AUG_KEY) ?? 'null')
+    if (
+      typeof raw?.champ === 'string' &&
+      Date.now() - Number(raw.at) < 75 * 60 * 1000 &&
+      Array.isArray(raw.chosen)
+    )
+      return { champ: raw.champ, ids: raw.chosen.map(Number).filter((x: number) => x > 0) }
+  } catch {
+    // Facultatif.
+  }
+  return { champ: '', ids: [] }
+}
+function saveChosen(champ: string, chosen: number[]): void {
+  try {
+    if (champ) localStorage.setItem(AUG_KEY, JSON.stringify({ champ, chosen, at: Date.now() }))
+    else localStorage.removeItem(AUG_KEY)
+  } catch {
+    // Facultatif.
+  }
 }
 
 const INJECT_DELAY = 700
@@ -159,6 +203,9 @@ export function useTactique(): TactiqueState {
   const [draft, setDraft] = useState<DraftState>(EMPTY_DRAFT)
   const [live, setLive] = useState<LiveGameData | null>(null)
   const [queue, setQueue] = useState<GameQueue>(NO_QUEUE)
+  // ARAM Mayhem : augments proposés (saisis) et pris pendant la partie.
+  const [offered, setOffered] = useState<number[]>([])
+  const [chosen, setChosen] = useState<{ champ: string; ids: number[] }>(readChosen)
   const [riot, setRiot] = useState<{ key: number; pages: RecommendedRunePage[] }>({
     key: 0,
     pages: []
@@ -201,6 +248,12 @@ export function useTactique(): TactiqueState {
       if (RESET_PHASES.includes(p)) {
         appliedRunes.current = ''
         appliedItemSet.current = ''
+      }
+      // Nouvelle partie : plus d'augments proposés ni pris.
+      if (p === 'ChampSelect' || p === 'Lobby') {
+        setOffered([])
+        setChosen({ champ: '', ids: [] })
+        saveChosen('', [])
       }
       setPhase(p)
     }
@@ -608,12 +661,33 @@ export function useTactique(): TactiqueState {
     wasLocked.current = locked
     if (phase !== 'ChampSelect') lastAdvice.current = null
   }, [phase, draft.isLocked, draft.localChampId, allRandom])
-  const personal = useMemo(
+  const learned = useMemo(
     () =>
       settings.personalLearning && review.learning.games > 0
         ? review.learning.bonusFor(champ?.id ?? null)
         : undefined,
     [settings.personalLearning, review.learning, champ]
+  )
+
+  // ARAM Mayhem : augments pris avec ce champion pendant la partie en cours.
+  const champName = champ?.id ?? ''
+  const chosenIds = useMemo(
+    () => (chosen.champ === champName ? chosen.ids : NO_IDS),
+    [chosen, champName]
+  )
+  const updateChosen = (ids: number[]): void => {
+    setChosen({ champ: champName, ids })
+    if (champName) saveChosen(champName, ids)
+  }
+  const ranked = useMemo(
+    () => rankOffered(catalog, genericBuild ? null : baseBuild, offered, chosenIds),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
+    [catalog, baseBuild, genericBuild, offered, chosenIds, lang]
+  )
+  // Objets : bonus appris de tes parties, et ceux qui vont avec tes augments.
+  const personal = useMemo(
+    () => augmentItemBonus(catalog, chosenIds, learned),
+    [catalog, chosenIds, learned]
   )
 
   const plan = useMemo(
@@ -752,6 +826,17 @@ export function useTactique(): TactiqueState {
     advice,
     review,
     nudges,
-    purchase
+    purchase,
+    augments: {
+      offered,
+      chosen: chosenIds,
+      ranked,
+      setOffered: (ids) => setOffered(ids.slice(0, 3)),
+      choose: (id) => {
+        if (!chosenIds.includes(id)) updateChosen([...chosenIds, id].slice(-6))
+        setOffered([])
+      },
+      remove: (id) => updateChosen(chosenIds.filter((x) => x !== id))
+    }
   }
 }

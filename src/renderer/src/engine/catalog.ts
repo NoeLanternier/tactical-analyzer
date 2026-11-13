@@ -127,6 +127,13 @@ export interface Catalog {
   /** Augments du mode (ARAM Mayhem) : nom, rareté, icône. */
   augmentInfo?: Record<number, AugmentInfo>
   /**
+   * Objets qui vont avec chaque augment (tous champions) : écart de part d'achat par rapport aux
+   * mêmes champions sans l'augment, et écart de taux de victoire (lissé).
+   */
+  augmentItems?: Record<number, { item: string; games: number; uplift: number; lift: number }[]>
+  /** Augments pris ensemble : [parties, écart de taux de victoire] pour 'a|b' (a < b, en texte). */
+  augmentPairs?: Record<string, [number, number]>
+  /**
    * Champions vus dans l'équipe adverse, tous postes confondus : [parties, taux de victoire de
    * leur équipe, part des parties où ils sont bannis]. `threatGames` : parties de référence.
    */
@@ -276,6 +283,8 @@ export function mergeOverride(
       fit: parseFit(raw?.fit) ?? base.fit,
       features: parseFeatures(raw?.features) ?? base.features,
       augmentInfo: parseAugmentInfo(raw?.augmentInfo) ?? base.augmentInfo,
+      augmentItems: parseAugmentItems(raw?.augmentItems) ?? base.augmentItems,
+      augmentPairs: parseAugmentPairs(raw?.augmentPairs) ?? base.augmentPairs,
       threats: threats ?? base.threats,
       threatGames: threats ? (sampleGames ?? undefined) : base.threatGames
     },
@@ -351,6 +360,40 @@ function parseAugmentInfo(raw: any): Catalog['augmentInfo'] {
         : {})
     }
   }
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseAugmentItems(raw: any): Catalog['augmentItems'] {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: NonNullable<Catalog['augmentItems']> = {}
+  for (const [k, list] of Object.entries<any>(raw)) {
+    const id = Number(k)
+    if (!(id > 0) || !Array.isArray(list)) continue
+    const rows = list
+      .filter(
+        (r: any) =>
+          typeof r?.item === 'string' &&
+          num(r.games) !== null &&
+          num(r.uplift) !== null &&
+          num(r.lift) !== null
+      )
+      .map((r: any) => ({
+        item: r.item,
+        games: r.games,
+        uplift: Math.max(-1, Math.min(1, r.uplift)),
+        lift: Math.max(-0.1, Math.min(0.1, r.lift))
+      }))
+    if (rows.length) out[id] = rows
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseAugmentPairs(raw: any): Catalog['augmentPairs'] {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: Record<string, [number, number]> = {}
+  for (const [k, v] of Object.entries<any>(raw))
+    if (/^\d+\|\d+$/.test(k) && Array.isArray(v) && num(v[0]) !== null && num(v[1]) !== null)
+      out[k] = [v[0], Math.max(-0.1, Math.min(0.1, v[1]))]
   return Object.keys(out).length ? out : undefined
 }
 
