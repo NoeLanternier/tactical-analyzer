@@ -302,6 +302,8 @@ export interface TactiqueApi {
   onLcuStatus: (cb: (status: LcuStatus) => void) => () => void
   onLiveUpdate: (cb: (data: LiveGameData | null) => void) => () => void
   onTogglePin: (cb: () => void) => () => void
+  /** Le curseur a quitté le panneau ouvert (suivi par le processus principal). */
+  onOverlayLeave: (cb: () => void) => () => void
   /** File de la partie (mode de jeu), dès le salon. */
   onQueueUpdate: (cb: (queue: GameQueue) => void) => () => void
   getInitialState: () => Promise<{
@@ -346,5 +348,7 @@ export interface TactiqueApi {
   saveReport: (gameId: number, facts: unknown) => Promise<ActionResult>
   openReportsFolder: () => void
   setOverlayMode: (expanded: boolean) => void
+  /** Prendre le clavier pour écrire dans un champ, ou le rendre au jeu. */
+  setKeyboard: (on: boolean) => void
   closeApp: () => void
 }

@@ -32,16 +32,43 @@ export default function App(): ReactElement {
   const expanded = hovered || pinned
 
   useEffect(() => window.api.onTogglePin(() => setPinned((p) => !p)), [])
+  // Curseur sorti du panneau (suivi par le processus principal, plus fiable au-dessus du jeu).
+  useEffect(
+    () =>
+      window.api.onOverlayLeave(() => {
+        if (leaveTimer.current) clearTimeout(leaveTimer.current)
+        setHovered(false)
+      }),
+    []
+  )
+  // Écrire dans un champ : la fenêtre prend le clavier, puis le rend au jeu en quittant le champ.
+  useEffect(() => {
+    const isField = (el: EventTarget | null): boolean =>
+      el instanceof HTMLElement && !!el.closest('input, textarea, select')
+    const down = (e: PointerEvent): void => {
+      if (isField(e.target)) window.api.setKeyboard(true)
+    }
+    const out = (e: FocusEvent): void => {
+      if (isField(e.target) && !isField(e.relatedTarget)) window.api.setKeyboard(false)
+    }
+    document.addEventListener('pointerdown', down, true)
+    document.addEventListener('focusout', out, true)
+    return () => {
+      document.removeEventListener('pointerdown', down, true)
+      document.removeEventListener('focusout', out, true)
+    }
+  }, [])
 
   // Titre de la fenêtre (barre des tâches) dans la langue de l'application.
   useEffect(() => {
     document.title = 'Tactical Analyzer'
   }, [t.lang])
 
-  // Le panneau ouvert capte la souris ; fermé, les clics traversent vers le jeu.
+  // Le panneau ouvert capte la souris ; fermé, les clics traversent vers le jeu. (Renvoyé aussi
+  // quand le survol change pendant qu'il est épinglé, pour reprendre le suivi du curseur.)
   useEffect(() => {
     window.api.setOverlayMode(expanded)
-  }, [expanded])
+  }, [expanded, hovered])
 
   const onEnter = (): void => {
     if (leaveTimer.current) clearTimeout(leaveTimer.current)

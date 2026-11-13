@@ -14,6 +14,7 @@ const api: TactiqueApi = {
   onLcuStatus: (cb) => listen('lcu-status', cb),
   onLiveUpdate: (cb) => listen('live-update', cb),
   onTogglePin: (cb) => listen('toggle-pin', () => cb()),
+  onOverlayLeave: (cb) => listen('overlay-leave', () => cb()),
   onLangUpdate: (cb) => listen('lang-update', cb),
   onQueueUpdate: (cb) => listen('lcu-queue-update', cb),
   getInitialState: () => ipcRenderer.invoke('get-initial-state'),
@@ -41,6 +42,7 @@ const api: TactiqueApi = {
   saveReport: (gameId, facts) => ipcRenderer.invoke('save-report', gameId, facts),
   openReportsFolder: () => ipcRenderer.send('open-reports-folder'),
   setOverlayMode: (expanded) => ipcRenderer.send('set-overlay-mode', expanded),
+  setKeyboard: (on) => ipcRenderer.send('set-keyboard', on),
   closeApp: () => ipcRenderer.send('close-app')
 }
 

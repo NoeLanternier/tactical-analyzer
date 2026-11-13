@@ -38,6 +38,54 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * Panneau ouvert au survol : il se referme quand le curseur en sort. La sortie est vérifiée sur la
+ * position réelle du curseur, et pas seulement sur l'événement de la page : au-dessus d'un jeu en
+ * plein écran, Windows ne l'envoie pas toujours (en particulier après un clic dans le panneau),
+ * et le panneau restait alors ouvert.
+ */
+const LEAVE_DELAY = 300
+let cursorTimer: NodeJS.Timeout | null = null
+function stopWatchingCursor(): void {
+  if (cursorTimer) clearInterval(cursorTimer)
+  cursorTimer = null
+}
+function watchCursor(win: BrowserWindow): void {
+  stopWatchingCursor()
+  let outsideSince = 0
+  cursorTimer = setInterval(() => {
+    if (win.isDestroyed()) return stopWatchingCursor()
+    const p = screen.getCursorScreenPoint()
+    const b = win.getBounds()
+    const inside = p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height
+    if (inside) {
+      outsideSince = 0
+      return
+    }
+    if (!outsideSince) outsideSince = Date.now()
+    else if (Date.now() - outsideSince >= LEAVE_DELAY) {
+      stopWatchingCursor()
+      setKeyboard(win, false)
+      win.webContents.send('overlay-leave')
+    }
+  }, 100)
+}
+
+/** Clavier pris par l'overlay (pour écrire dans un champ), ou rendu au jeu. */
+let keyboard = false
+function setKeyboard(win: BrowserWindow, on: boolean): void {
+  if (win.isDestroyed() || keyboard === on) return
+  keyboard = on
+  if (on) {
+    win.setFocusable(true)
+    win.focus()
+  } else {
+    // Le focus revient à la fenêtre d'avant (le jeu).
+    win.blur()
+    win.setFocusable(false)
+  }
+}
 let settings: Settings = loadSettings()
 setDebug(settings.debug)
 
@@ -90,6 +138,9 @@ function createWindow(): void {
     alwaysOnTop: true,
     resizable: false,
     skipTaskbar: false,
+    // Un clic dans l'overlay ne prend pas le focus au jeu (sinon, de retour dans le jeu, le premier
+    // clic ne sert qu'à le réactiver). Le clavier n'est pris que pour écrire (voir set-keyboard).
+    focusable: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
@@ -102,6 +153,8 @@ function createWindow(): void {
   mainWindow.setAlwaysOnTop(true, 'screen-saver')
   mainWindow.setVisibleOnAllWorkspaces(true)
   mainWindow.setIgnoreMouseEvents(true, { forward: true })
+  // (une fenêtre qui ne prend pas le focus est retirée de la barre des tâches : on l'y remet.)
+  mainWindow.setSkipTaskbar(false)
 
   mainWindow.on('ready-to-show', () => mainWindow?.showInactive())
   mainWindow.on('closed', () => (mainWindow = null))
@@ -232,8 +285,21 @@ function registerIpc(): void {
   ipcMain.on('set-overlay-mode', (event, expanded: boolean) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return
-    if (expanded) win.setIgnoreMouseEvents(false)
-    else win.setIgnoreMouseEvents(true, { forward: true })
+    if (expanded) {
+      win.setIgnoreMouseEvents(false)
+      watchCursor(win)
+    } else {
+      stopWatchingCursor()
+      setKeyboard(win, false)
+      win.setIgnoreMouseEvents(true, { forward: true })
+    }
+  })
+
+  // Champ de saisie (recherche, réglages) : la fenêtre prend le clavier le temps d'écrire, puis
+  // le rend au jeu.
+  ipcMain.on('set-keyboard', (event, on: boolean) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win) setKeyboard(win, !!on)
   })
 
   ipcMain.on('close-app', () => app.quit())
