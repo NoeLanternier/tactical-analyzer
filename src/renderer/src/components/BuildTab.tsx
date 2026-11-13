@@ -583,6 +583,30 @@ function formatTime(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
+/**
+ * Partie qui ne compte pas (personnalisée, contre l'IA…) ou mesurée à part (Swiftplay) : le dire
+ * avant la partie, pour qu'aucun chiffre du bilan ne surprenne.
+ */
+function QueueNotice({ t }: { t: TactiqueState }): ReactElement | null {
+  const k = t.queueKind
+  const text =
+    k === 'custom' || k === 'bots' || k === 'small'
+      ? tr(
+          `${k === 'bots' ? 'Partie contre l’IA' : k === 'small' ? 'Partie à moins de 5 contre 5' : 'Partie personnalisée'} : les conseils restent actifs, mais elle ne comptera ni dans le bilan ni dans tes statistiques.`,
+          `${k === 'bots' ? 'Game against AI' : k === 'small' ? 'Smaller than 5v5' : 'Custom game'}: advice stays on, but it won’t count in the review or your stats.`
+        )
+      : t.gameType === 'swift'
+        ? tr(
+            'Swiftplay : partie accélérée. Le bilan la compare aux joueurs de tes parties Swiftplay, à part des classées et des normales.',
+            'Swiftplay: accelerated game. The review compares it with players of your Swiftplay games, separately from ranked and normal games.'
+          )
+        : null
+  if (!text) return null
+  return (
+    <p className="rounded bg-white/5 px-2 py-1 text-[10px] leading-snug text-slate-400">{text}</p>
+  )
+}
+
 export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
   const { gd, champ, build, runePage, plan, live } = t
   if (!gd) return null
@@ -622,6 +646,7 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
   if (!inGame && !t.draft.isLocked && t.advice) {
     return (
       <div className="flex flex-col gap-3">
+        <QueueNotice t={t} />
         <PickVerdictCard t={t} />
         <AdviceCard t={t} />
         <CoachCard t={t} inGame={false} />
@@ -631,6 +656,7 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
 
   return (
     <div className="flex flex-col gap-3">
+      <QueueNotice t={t} />
       {/* Champion */}
       <div className="flex items-center gap-3">
         <img

@@ -17,7 +17,9 @@ ARAM, ARAM: Mayhem and rotating modes (URF, ARURF, One for All…).
   suggestion at each purchase, deaths, objectives and vision, against benchmarks of your role and rank
   (in ARAM and the other modes: damage and gold per minute, damage share, deaths and build, against
   benchmarks of the mode; in ARAM: Mayhem, ARAM benchmarks scaled to the players of your own Mayhem
-  games).
+  games). Each game type is measured on its own: ranked, normal (same benchmarks, same rules),
+  Swiftplay (accelerated game: benchmarks from the other players in your role in your Swiftplay games)
+  and each mode. Custom games, games against AI and games smaller than 5v5 are never counted.
 
 Statistics come from a nightly job ([tactique-meta](https://github.com/NoeLanternier/tactique-meta))
 that reads ranked solo games of Master+ and Gold to Emerald players, and the ARAM and rotating-mode

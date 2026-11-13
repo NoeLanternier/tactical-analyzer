@@ -293,8 +293,8 @@ export function SettingsTab({ t }: { t: TactiqueState }): ReactElement {
         <Toggle
           label={tr('Bilan automatique en fin de partie', 'Automatic post-game review')}
           hint={tr(
-            'Analyse chaque partie, à tous les postes et en ARAM (farm ou dégâts et or, build, combats, objectifs, vision).',
-            'Reviews every game, in every role and in ARAM (farm or damage and gold, build, fights, objectives, vision).'
+            'Analyse chaque partie, à tous les postes et en ARAM (farm ou dégâts et or, build, combats, objectifs, vision). Classées, normales, Swiftplay et chaque mode sont mesurés à part ; les parties personnalisées et contre l’IA ne comptent pas.',
+            'Reviews every game, in every role and in ARAM (farm or damage and gold, build, fights, objectives, vision). Ranked, normal, Swiftplay and each mode are measured separately; custom games and games against AI do not count.'
           )}
           checked={s.autoReview}
           onChange={(v) => update({ autoReview: v })}
@@ -302,8 +302,8 @@ export function SettingsTab({ t }: { t: TactiqueState }): ReactElement {
         <Toggle
           label={tr('Adapter le build à mes résultats', 'Adapt the build to my results')}
           hint={tr(
-            'Les objets qui vous réussissent remontent un peu dans le build (effet limité).',
-            'Items that work for you move up a little in the build (limited effect).'
+            'Les objets qui vous réussissent remontent un peu dans le build (effet limité), d’après tes parties aux mêmes règles : classées et normales ensemble, Swiftplay et chaque mode à part.',
+            'Items that work for you move up a little in the build (limited effect), based on your games with the same rules: ranked and normal together, Swiftplay and each mode separately.'
           )}
           checked={s.personalLearning}
           onChange={(v) => update({ personalLearning: v })}

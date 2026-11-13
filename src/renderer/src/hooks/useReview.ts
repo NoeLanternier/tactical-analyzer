@@ -3,9 +3,24 @@ import type { GamePhase, RawPostGame } from '../../../shared/types'
 import type { Catalog } from '../engine/catalog'
 import { champFromLive, type GameData } from '../engine/gameData'
 import { tr, type Lang } from '../../../shared/i18n'
-import { isMode, type Role } from '../engine/role'
-import { MODES, modeOf, type ModeKey } from '../../../shared/modes'
-import { modeData as computeModeData, withModeBench, type ModeData } from '../engine/modeData'
+import { isLane, isMode, type Lane, type Role } from '../engine/role'
+import {
+  MODES,
+  gameTypeOf,
+  modeOf,
+  rulesFamily,
+  type GameType,
+  type ModeKey
+} from '../../../shared/modes'
+import {
+  modeData as computeModeData,
+  swiftBench,
+  withModeBench,
+  withNormalNote,
+  withSwiftBench,
+  type LobbyBench,
+  type ModeData
+} from '../engine/modeData'
 import { useRoleCatalogs } from './useRemoteMeta'
 import { computeLearning, type Learning } from '../engine/learning'
 import {
@@ -32,6 +47,13 @@ export interface ReviewState {
    * repères et les augments. Null hors de ces modes.
    */
   modeData: ModeData | null
+  /**
+   * Famille de règles des parties qui servent à l'apprentissage des conseils (classées et normales
+   * ensemble, Swiftplay et chaque mode à part) : celle de la partie en cours, sinon de la dernière.
+   */
+  family: string
+  /** Type de la partie en cours ou de la dernière partie au poste joué (filtre par défaut du bilan). */
+  currentType: GameType | null
   status: ReviewStatus
   /** Bilan de la partie qui vient de se terminer, pas encore consulté. */
   fresh: number | null
@@ -62,6 +84,15 @@ function isFacts(x: any): x is GameFacts {
 }
 
 /**
+ * Partie comptée dans les bilans : pas les parties personnalisées ni contre l'IA (enregistrées par
+ * d'anciennes versions de l'app), ni les files inconnues.
+ */
+function countable(f: GameFacts): boolean {
+  const mode = isMode(f.role) ? f.role : modeOf(f.queueId)
+  return gameTypeOf(f.queueId, mode) !== null
+}
+
+/**
  * Bilans d'après-partie : détection de la fin de partie, récupération dans l'historique du client,
  * enregistrement, analyse de toutes les parties et apprentissage.
  */
@@ -71,7 +102,9 @@ export function useReview(
   role: Role,
   meta: { url: string; level: 'master' | 'gold' },
   autoReview: boolean,
-  lang: Lang
+  lang: Lang,
+  /** Type de la partie en cours (file du client), null si inconnu. */
+  gameType: GameType | null = null
 ): ReviewState {
   const [facts, setFacts] = useState<GameFacts[]>([])
   const [status, setStatus] = useState<ReviewStatus>({ state: 'idle' })
@@ -93,7 +126,7 @@ export function useReview(
   useEffect(() => {
     void window.api
       .listReports()
-      .then((list) => setFacts(list.filter(isFacts).map(repairStoredRoles)))
+      .then((list) => setFacts(list.filter(isFacts).filter(countable).map(repairStoredRoles)))
   }, [])
 
   const store = useCallback(async (raw: RawPostGame | null, myRole?: Role): Promise<string> => {
@@ -202,8 +235,11 @@ export function useReview(
       void (async () => {
         try {
           const recent = (await window.api.getRecentGames(count)).filter(
-            // Faille et modes pris en charge (ARAM, ARAM Mayhem…) ; pas l'Arène ni TFT.
-            (g) => !known.has(g.gameId) && modeOf(g.queueId, null, g.mapId) !== null
+            // Faille et modes pris en charge (ARAM, ARAM Mayhem…) ; pas l'Arène ni TFT, ni les
+            // parties personnalisées ou contre l'IA.
+            (g) =>
+              !known.has(g.gameId) &&
+              gameTypeOf(g.queueId, modeOf(g.queueId, null, g.mapId)) !== null
           )
           let added = 0
           for (let i = 0; i < recent.length; i++) {
@@ -254,12 +290,24 @@ export function useReview(
   const reports = useMemo(() => {
     if (!gd) return []
     const out: GameReport[] = []
+    // Swiftplay : repères de chaque poste tirés des autres joueurs de tes parties Swiftplay.
+    const swift = new Map<Lane, LobbyBench | null>()
+    const swiftFor = (lane: Lane): LobbyBench | null => {
+      if (!swift.has(lane)) swift.set(lane, swiftBench(facts, lane, gd))
+      return swift.get(lane) ?? null
+    }
     for (const f of facts.slice(0, MAX_ANALYZED)) {
       const r = f.role ?? 'jungle'
       const base = r === role ? catalog : others.get(r)
       // Méta de ce poste pas encore chargée : la partie sera analysée dès qu'elle arrive.
       if (!base) continue
-      const cat = isMode(r) ? withModeBench(base, privateData.get(r) ?? null) : base
+      const cat = isMode(r)
+        ? withModeBench(base, privateData.get(r) ?? null)
+        : isLane(r) && gameTypeOf(f.queueId, 'sr') === 'swift'
+          ? withSwiftBench(base, swiftFor(r), r)
+          : gameTypeOf(f.queueId, 'sr') === 'normal'
+            ? withNormalNote(base)
+            : base
       try {
         out.push(analyzeGame(gd, cat, f))
       } catch {
@@ -270,12 +318,20 @@ export function useReview(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
   }, [gd, catalog, role, others, facts, privateData, lang])
 
-  // Apprentissage : parties de la Faille entre elles (tous postes), et chaque mode à part (un
-  // objet ou une erreur en ARAM ne dit rien de la Faille, et inversement).
-  const learning = useMemo(() => {
-    const mode = isMode(role) ? role : null
-    return computeLearning(reports.filter((r) => (isMode(r.role) ? r.role : null) === mode))
-  }, [reports, role])
+  // Type de la partie en cours, sinon de ta dernière partie au poste (ou dans le mode) joué.
+  const currentType = useMemo<GameType | null>(() => {
+    if (gameType) return gameType
+    if (isMode(role)) return role
+    return reports.find((r) => isLane(r.role) && r.type)?.type ?? null
+  }, [gameType, role, reports])
+  // Apprentissage : parties jouées avec les mêmes règles (classées et normales de la Faille, tous
+  // postes ; Swiftplay à part ; chaque mode à part : un objet ou une erreur en ARAM ne dit rien de
+  // la Faille, et inversement).
+  const family = rulesFamily(currentType ?? (isMode(role) ? role : 'ranked'))
+  const learning = useMemo(
+    () => computeLearning(reports.filter((r) => r.type && rulesFamily(r.type) === family)),
+    [reports, family]
+  )
 
   const modeData = useMemo(
     () =>
@@ -289,6 +345,8 @@ export function useReview(
     reports,
     learning,
     modeData,
+    family,
+    currentType,
     status,
     fresh,
     markSeen: () => setFresh(null),

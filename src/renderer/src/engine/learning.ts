@@ -67,7 +67,7 @@ const LABELS: Record<string, [string, string]> = {
   'no-armor': ['Pas d’armure', 'No armor'],
   'deaths-gold': ['Morts avec de l’or en poche', 'Deaths with unspent gold'],
   'unspent-gold': ['Or non dépensé', 'Unspent gold'],
-  'early-deaths': ['Morts avant 14 min', 'Deaths before 14 min'],
+  'early-deaths': ['Morts en début de partie', 'Early-game deaths'],
   'many-deaths': ['Trop de morts', 'Too many deaths'],
   'kp-low': ['Faible participation', 'Low kill participation'],
   'objectives-lost': ['Objectifs perdus', 'Objectives lost'],
@@ -197,7 +197,7 @@ export function computeLearning(reports: GameReport[]): Learning {
       .map(([id, n]) => ({
         id,
         label: LABELS[id] ? tr(...LABELS[id]) : id,
-        tip: tone === 'bad' ? tipFor(id, bench, recent[0].role) : undefined,
+        tip: tone === 'bad' ? tipFor(id, bench, recent[0].role, recent[0].type) : undefined,
         count: n,
         of: recent.length
       }))
@@ -209,11 +209,15 @@ export function computeLearning(reports: GameReport[]): Learning {
     if (xs.length) averages[c] = Math.round(avg(xs))
   }
 
-  // Progression : 5 dernières parties vs 5 précédentes.
+  // Progression : 5 dernières parties vs 5 précédentes, au même poste que la dernière (le farm ou
+  // la vision d'un support ne se comparent pas à ceux d'un jungler).
   const trends: Trend[] = []
-  if (reports.length >= 6) {
-    const a = reports.slice(0, 5)
-    const b = reports.slice(5, 10)
+  const lastRole = reports[0].role
+  const sameRole = reports.filter((r) => r.role === lastRole)
+  const laneless = isMode(lastRole)
+  if (sameRole.length >= 6) {
+    const a = sameRole.slice(0, 5)
+    const b = sameRole.slice(5, 10)
     const add = (
       key: string,
       label: string,
@@ -233,13 +237,30 @@ export function computeLearning(reports: GameReport[]): Learning {
       true,
       (x) => String(Math.round(x))
     )
-    add(
-      'cs10',
-      tr('Farm à 10 min', 'Farm at 10 min'),
-      (r) => r.stats.cs10,
-      true,
-      (x) => `${Math.round(x)} cs`
-    )
+    if (!laneless && lastRole !== 'support')
+      add(
+        'cs10',
+        tr('Farm à 10 min', 'Farm at 10 min'),
+        (r) => r.stats.cs10,
+        true,
+        (x) => `${Math.round(x)} cs`
+      )
+    if (laneless) {
+      add(
+        'dmg',
+        tr('Dégâts / min', 'Damage / min'),
+        (r) => r.stats.dmgPerMin,
+        true,
+        (x) => fmtNumber(Math.round(x))
+      )
+      add(
+        'goldMin',
+        tr('Or / min', 'Gold / min'),
+        (r) => r.stats.goldPerMin,
+        true,
+        (x) => fmtNumber(Math.round(x))
+      )
+    }
     add(
       'kp',
       tr('Participation', 'Kill participation'),
@@ -261,7 +282,8 @@ export function computeLearning(reports: GameReport[]): Learning {
       false,
       (x) => `${fr1(x)} min`
     )
-    add('vision', tr('Vision / min', 'Vision / min'), (r) => r.stats.visionPerMin, true, fr1)
+    if (!laneless)
+      add('vision', tr('Vision / min', 'Vision / min'), (r) => r.stats.visionPerMin, true, fr1)
   }
 
   return {
@@ -295,7 +317,9 @@ export function liveNudges(
   me: LivePlayer | null,
   plan: ItemPlan | null,
   bench: Benchmark,
-  role: Role = 'jungle'
+  role: Role = 'jungle',
+  /** Swiftplay : rythme accéléré, les repères de farm et de début de partie ne s'appliquent pas. */
+  swift = false
 ): Nudge[] {
   if (!live || !me) return []
   const out: Nudge[] = []
@@ -332,7 +356,13 @@ export function liveNudges(
       tone: 'blue'
     })
   }
-  if (!mode && (weak.has('cs-low') || weak.has('gold-behind')) && t >= 5 * 60 && t <= 20 * 60) {
+  if (
+    !mode &&
+    !swift &&
+    (weak.has('cs-low') || weak.has('gold-behind')) &&
+    t >= 5 * 60 &&
+    t <= 20 * 60
+  ) {
     const perMin = me.scores.creepScore / (t / 60)
     const target = bench.cs10 / 10
     if (perMin < target * 0.88)
@@ -349,7 +379,7 @@ export function liveNudges(
         tone: 'orange'
       })
   }
-  if (!mode && weak.has('early-deaths') && t < 14 * 60) {
+  if (!mode && !swift && weak.has('early-deaths') && t < 14 * 60) {
     out.push({
       id: 'early',
       text: tr(

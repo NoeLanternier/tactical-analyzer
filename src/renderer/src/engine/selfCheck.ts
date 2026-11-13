@@ -1,4 +1,5 @@
 import type { GameReport } from './postgame'
+import { gameTypeOf, modeOf } from '../../../shared/modes'
 
 // « Est-ce que l'app t'aide ? » : tes parties où tu as suivi les conseils, comparées à celles où
 // tu ne les as pas suivis.
@@ -6,7 +7,8 @@ import type { GameReport } from './postgame'
 // - Draft : rang de ton champion dans le classement de l'app au moment où tu l'as verrouillé
 //   (journal de draft enregistré en sélection des champions).
 // C'est une comparaison de tes propres parties, pas une preuve : il faut assez de parties de
-// chaque côté pour qu'un écart veuille dire quelque chose.
+// chaque côté pour qu'un écart veuille dire quelque chose. Elle se fait par type de partie
+// (classées, normales, ARAM…) : les bilans passés ici sont tous du même type.
 
 /** Ton choix au moment du verrouillage, d'après le classement de l'app. */
 export interface DraftLogEntry {
@@ -19,6 +21,8 @@ export interface DraftLogEntry {
   winRate: number
   bestWinRate: number
   known: { allies: number; enemies: number }
+  /** File de la partie (absente des journaux plus anciens : classée en pratique). */
+  queue?: number
 }
 
 export interface Group {
@@ -78,6 +82,8 @@ export function draftEntryFor(r: GameReport, log: DraftLogEntry[]): DraftLogEntr
   for (const e of log) {
     if (e.champ !== r.champ.id) continue
     if (e.t < start - 15 * 60_000 || e.t > start + 2 * 60_000) continue
+    // Draft d'une autre file (sélection annulée puis autre partie…) : pas cette partie.
+    if (e.queue !== undefined && gameTypeOf(e.queue, modeOf(e.queue)) !== r.type) continue
     if (!best || Math.abs(start - e.t) < Math.abs(start - best.t)) best = e
   }
   return best

@@ -62,7 +62,16 @@ import {
 import { DEFAULT_BENCH_BY_ROLE } from '../engine/postgame'
 import { useReview, type ReviewState } from './useReview'
 import { useRemoteMeta } from './useRemoteMeta'
-import { MODES, modeOf, type ModeKey } from '../../../shared/modes'
+import {
+  MODES,
+  gameTypeOf,
+  modeOf,
+  queueKind,
+  rulesFamily,
+  type GameType,
+  type ModeKey,
+  type QueueKind
+} from '../../../shared/modes'
 import {
   augmentsUrl,
   clientPosition,
@@ -139,6 +148,12 @@ export interface TactiqueState {
   role: Role
   /** Mode de la partie : 'sr' (Faille), un mode pris en charge, ou null (mode non pris en charge). */
   mode: ModeKey | 'sr' | null
+  /**
+   * Partie en cours (file du client) : nature de la file et type pour les statistiques (null :
+   * personnalisée, contre l'IA… jamais comptée ; ou file inconnue).
+   */
+  queueKind: QueueKind | null
+  gameType: GameType | null
   /** Conseils de pick et de ban (pendant la sélection, avant le verrouillage). */
   advice: DraftAdvice | null
   /** Bilans d'après-partie et apprentissage. */
@@ -332,6 +347,16 @@ export function useTactique(): TactiqueState {
     mode
   })
   const modeInfo = isMode(role) ? MODES[role] : null
+  // Type de la partie (classée, normale, Swiftplay, ARAM…) : ses statistiques ne se mélangent pas
+  // aux autres. Null : partie personnalisée ou contre l'IA (conseils actifs, jamais comptée).
+  const queueInfo = useMemo(() => {
+    const known = !!(queue.queueId || queue.gameMode)
+    return {
+      kind: (known ? queueKind(queue.queueId) : null) as QueueKind | null,
+      type: (known ? gameTypeOf(queue.queueId, mode) : null) as GameType | null
+    }
+  }, [queue, mode])
+  const gameType = queueInfo.type
   useEffect(() => saveRole(role), [role])
   const jungle = role === 'jungle'
 
@@ -612,7 +637,8 @@ export function useTactique(): TactiqueState {
     role,
     { url: settings.metaUrl, level: metaLevel },
     settings.autoReview,
-    lang
+    lang,
+    gameType
   )
 
   // Résultats du joueur par champion (bilans), pour les conseils de pick.
@@ -621,13 +647,15 @@ export function useTactique(): TactiqueState {
     const m: PersonalRecord = new Map()
     for (const r of review.reports) {
       if (!r.champ || (r.role ?? 'jungle') !== role) continue
+      // Mêmes règles seulement (classées et normales ensemble ; pas Swiftplay).
+      if (!r.type || rulesFamily(r.type) !== review.family) continue
       const rec = m.get(r.champ.id) ?? { games: 0, wins: 0 }
       rec.games++
       if (r.win) rec.wins++
       m.set(r.champ.id, rec)
     }
     return m
-  }, [review.reports, role])
+  }, [review.reports, review.family, role])
 
   // Modes tirés au hasard (ARAM…) : le champion est attribué d'emblée, mais le banc et les
   // relances restent possibles jusqu'à la fin de la sélection.
@@ -666,12 +694,13 @@ export function useTactique(): TactiqueState {
     if (advice) lastAdvice.current = advice
   }, [advice])
   useEffect(() => {
-    // (modes tirés au hasard : pas de choix à juger, le champion est attribué.)
+    // (modes tirés au hasard : pas de choix à juger, le champion est attribué ; parties
+    // personnalisées et contre l'IA : jamais comptées.)
     const locked = phase === 'ChampSelect' && draft.isLocked && !allRandom
     if (locked && !wasLocked.current) {
       const a = lastAdvice.current
       const mine = a?.myPick
-      if (a && mine && mine.champ.key === draft.localChampId)
+      if (a && mine && mine.champ.key === draft.localChampId && gameType)
         appendDraftLog({
           t: Date.now(),
           champ: mine.champ.id,
@@ -679,12 +708,13 @@ export function useTactique(): TactiqueState {
           total: a.ranking.length,
           winRate: mine.winRate,
           bestWinRate: a.ranking[0]?.winRate ?? mine.winRate,
-          known: a.known
+          known: a.known,
+          queue: queue.queueId
         })
     }
     wasLocked.current = locked
     if (phase !== 'ChampSelect') lastAdvice.current = null
-  }, [phase, draft.isLocked, draft.localChampId, allRandom])
+  }, [phase, draft.isLocked, draft.localChampId, allRandom, gameType, queue.queueId])
   const learned = useMemo(
     () =>
       settings.personalLearning && review.learning.games > 0
@@ -769,9 +799,12 @@ export function useTactique(): TactiqueState {
 
   // Rappels selon la partie : édition personnelle seulement.
   const nudges = useMemo(
-    () => (RIOT_COMPLIANT ? [] : liveNudges(review.learning, live, me, plan, bench, role)),
+    () =>
+      RIOT_COMPLIANT
+        ? []
+        : liveNudges(review.learning, live, me, plan, bench, role, gameType === 'swift'),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
-    [review.learning, live, me, plan, bench, role, lang]
+    [review.learning, live, me, plan, bench, role, gameType, lang]
   )
 
   // Injection des runes pendant la sélection (avec délai pour ne pas spammer au survol).
@@ -872,6 +905,8 @@ export function useTactique(): TactiqueState {
     itemSetSync,
     role,
     mode,
+    queueKind: queueInfo.kind,
+    gameType,
     advice,
     review,
     nudges,

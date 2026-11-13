@@ -13,7 +13,8 @@ import type { TactiqueState } from '../hooks/useTactique'
 import { champIcon } from '../engine/gameData'
 import { categoryLabel, tipFor, type Category, type GameReport } from '../engine/postgame'
 import { fmtNumber, fmtPct, getLang, tr } from '../../../shared/i18n'
-import type { Learning } from '../engine/learning'
+import { computeLearning, type Learning } from '../engine/learning'
+import { gameTypeName, type GameType } from '../../../shared/modes'
 import { Card, Chip, ItemIcon, Meter } from './ui'
 import { isMode, roleLabel } from '../engine/role'
 import { augmentName } from '../engine/augments'
@@ -136,6 +137,7 @@ function ReportView({ r, version }: { r: GameReport; version: string }): ReactEl
                 {r.win ? tr('Victoire', 'Victory') : tr('Défaite', 'Defeat')}
               </Chip>
               <Chip>{roleLabel(r.role)}</Chip>
+              {r.queue !== roleLabel(r.role) && <Chip tone="blue">{r.queue}</Chip>}
             </div>
             <div className="text-[11px] text-slate-400">
               {r.kda} · {fmt(r.facts.duration)}
@@ -205,9 +207,9 @@ function ReportView({ r, version }: { r: GameReport; version: string }): ReactEl
                 <div className="min-w-0">
                   <div className="text-xs text-slate-100">{f.title}</div>
                   {f.detail && <div className="text-[10px] text-slate-400">{f.detail}</div>}
-                  {tipFor(f.id, r.bench, r.role) && (
+                  {tipFor(f.id, r.bench, r.role, r.type) && (
                     <div className="text-[10px] text-lolblue">
-                      → {tipFor(f.id, r.bench, r.role)}
+                      → {tipFor(f.id, r.bench, r.role, r.type)}
                     </div>
                   )}
                 </div>
@@ -489,14 +491,24 @@ function CompareRow({
 }
 
 /** Est-ce que suivre l'app te fait gagner plus ? */
-function SelfCheckCard({ reports }: { reports: GameReport[] }): ReactElement {
+function SelfCheckCard({
+  reports,
+  type
+}: {
+  reports: GameReport[]
+  type: GameType | null
+}): ReactElement {
   const check = useMemo(() => computeSelfCheck(reports, readDraftLog()), [reports])
+  const name = type ? gameTypeName(type, getLang()) : ''
   return (
-    <Card title={tr('L’app t’aide-t-elle ?', 'Does the app help you?')}>
+    <Card
+      title={tr('L’app t’aide-t-elle ?', 'Does the app help you?')}
+      right={name ? <Chip>{name}</Chip> : undefined}
+    >
       <p className="mb-2 text-[10px] leading-snug text-slate-500">
         {tr(
-          'Tes parties où tu as suivi les conseils, comparées aux autres. Ce n’est pas une preuve absolue (tu ne suis peut-être pas les conseils dans les mêmes situations), mais un écart net et durable est un bon signe… ou un problème à corriger.',
-          'Your games where you followed the advice, compared with the others. Not absolute proof (you may not follow the advice in the same situations), but a clear, lasting gap is a good sign… or a problem to fix.'
+          `Tes parties (${name}) où tu as suivi les conseils, comparées aux autres parties du même type. Ce n’est pas une preuve absolue (tu ne suis peut-être pas les conseils dans les mêmes situations), mais un écart net et durable est un bon signe… ou un problème à corriger.`,
+          `Your games (${name}) where you followed the advice, compared with other games of the same type. Not absolute proof (you may not follow the advice in the same situations), but a clear, lasting gap is a good sign… or a problem to fix.`
         )}
       </p>
       <div className="flex flex-col gap-2.5">
@@ -541,12 +553,13 @@ function SelfCheckCard({ reports }: { reports: GameReport[] }): ReactElement {
   )
 }
 
-function ProgressCard({ l }: { l: Learning }): ReactElement {
+function ProgressCard({ l, type }: { l: Learning; type: GameType | null }): ReactElement {
   return (
     <Card
       title={tr('Progression et apprentissage', 'Progress & learning')}
       right={
         <Chip>
+          {type ? `${gameTypeName(type, getLang())} · ` : ''}
           {l.games} {tr('parties', 'games')}
         </Chip>
       }
@@ -648,8 +661,8 @@ function ProgressCard({ l }: { l: Learning }): ReactElement {
           </div>
           <p className="mt-1 text-[10px] text-slate-500">
             {tr(
-              'Ces résultats ajustent légèrement le build conseillé (réglable dans Réglages).',
-              'These results slightly adjust the suggested build (can be turned off in Settings).'
+              'Ces résultats ajustent légèrement le build conseillé dans les parties aux mêmes règles (classées et normales ensemble, Swiftplay et chaque mode à part ; réglable dans Réglages).',
+              'These results slightly adjust the suggested build in games with the same rules (ranked and normal together, Swiftplay and each mode separately; can be turned off in Settings).'
             )}
           </p>
         </div>
@@ -658,12 +671,35 @@ function ProgressCard({ l }: { l: Learning }): ReactElement {
   )
 }
 
+/** Types de partie présents dans les bilans, du plus joué au moins joué. */
+function typesOf(reports: GameReport[]): { type: GameType; games: number }[] {
+  const n = new Map<GameType, number>()
+  for (const r of reports) if (r.type) n.set(r.type, (n.get(r.type) ?? 0) + 1)
+  return [...n.entries()]
+    .map(([type, games]) => ({ type, games }))
+    .sort((a, b) => b.games - a.games)
+}
+
 export function ReviewTab({ t }: { t: TactiqueState }): ReactElement | null {
   const [selected, setSelected] = useState<number | null>(null)
+  const [picked, setPicked] = useState<GameType | null>(null)
   const { gd } = t
-  const { reports, learning } = t.review
+  const { reports, currentType } = t.review
+  // Chaque type de partie se mesure à part : classées, normales, Swiftplay, ARAM… (filtre).
+  const types = useMemo(() => typesOf(reports), [reports])
+  const type =
+    (picked && types.some((x) => x.type === picked) ? picked : null) ??
+    (currentType && types.some((x) => x.type === currentType) ? currentType : null) ??
+    types[0]?.type ??
+    null
+  const shown = useMemo(() => reports.filter((r) => r.type === type), [reports, type])
+  const learning = useMemo(() => computeLearning(shown), [shown])
   if (!gd) return null
-  const current = reports.find((r) => r.facts.gameId === selected) ?? reports[0] ?? null
+  const current =
+    shown.find((r) => r.facts.gameId === selected) ??
+    reports.find((r) => r.facts.gameId === selected) ??
+    shown[0] ??
+    null
 
   return (
     <div className="flex flex-col gap-3">
@@ -677,6 +713,12 @@ export function ReviewTab({ t }: { t: TactiqueState }): ReactElement | null {
               'After each game, in any role or in ARAM, the app fetches the game from the client and reviews your farm (or your damage and gold in ARAM), your build (compared with the advice at each moment), your deaths, objectives and vision. Recurring weaknesses are recalled before and during your next games, and your results refine the suggested build.'
             )}
           </p>
+          <p className="mt-2 text-[11px] text-slate-400">
+            {tr(
+              'Chaque type de partie est mesuré à part (classées, normales, Swiftplay, ARAM, ARAM Mayhem…). Les parties personnalisées et contre l’IA ne sont pas comptées.',
+              'Each game type is measured separately (ranked, normal, Swiftplay, ARAM, ARAM Mayhem…). Custom games and games against AI are not counted.'
+            )}
+          </p>
           <p className="mt-2 text-[11px] text-slate-300">
             {tr(
               'Pour démarrer tout de suite : « Importer 20 parties ».',
@@ -686,12 +728,29 @@ export function ReviewTab({ t }: { t: TactiqueState }): ReactElement | null {
         </Card>
       ) : (
         <>
+          {types.length > 1 && (
+            <div className="flex flex-wrap gap-1">
+              {types.map((x) => (
+                <button
+                  key={x.type}
+                  type="button"
+                  onClick={() => {
+                    setPicked(x.type)
+                    setSelected(null)
+                  }}
+                  className={`rounded px-1.5 py-0.5 text-[10px] ${x.type === type ? 'bg-lolblue/25 text-white ring-1 ring-lolblue/60' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+                >
+                  {gameTypeName(x.type, getLang())} · {x.games}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex gap-1.5 overflow-x-auto pb-1">
-            {reports.slice(0, 20).map((r) => (
+            {shown.slice(0, 20).map((r) => (
               <button
                 key={r.facts.gameId}
                 onClick={() => setSelected(r.facts.gameId)}
-                title={`${r.champ?.label ?? ''} ${r.kda} — ${r.grade}`}
+                title={`${r.champ?.label ?? ''} ${r.kda} — ${r.grade} · ${r.queue}`}
                 className={`relative shrink-0 rounded-full border-2 ${r.win ? 'border-emerald-400/70' : 'border-red-400/70'} ${current === r ? 'ring-2 ring-lolblue' : 'opacity-70 hover:opacity-100'}`}
               >
                 {r.champ && (
@@ -710,8 +769,8 @@ export function ReviewTab({ t }: { t: TactiqueState }): ReactElement | null {
             ))}
           </div>
           {current && <ReportView r={current} version={gd.version} />}
-          <SelfCheckCard reports={reports} />
-          <ProgressCard l={learning} />
+          <SelfCheckCard reports={shown} type={type} />
+          <ProgressCard l={learning} type={type} />
         </>
       )}
     </div>

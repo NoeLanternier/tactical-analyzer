@@ -6,9 +6,17 @@ import { chooseVariant } from './variants'
 import { adaptChoices } from './choices'
 import { tw } from './tuning'
 import { ROLES, defaultStart, isMode, roleFromPosition, type Lane, type Role } from './role'
-import { MODES, modeOf, type ModeKey } from '../../../shared/modes'
+import {
+  MODES,
+  gameTypeOf,
+  modeOf,
+  queueKind,
+  queueName,
+  type GameType,
+  type ModeKey
+} from '../../../shared/modes'
 import { analyzeThreat } from './threat'
-import { fmtNumber, fmtPct, gold, tr } from '../../../shared/i18n'
+import { fmtNumber, fmtPct, getLang, gold, tr } from '../../../shared/i18n'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -198,6 +206,21 @@ export function normalizeGame(
   const mode = modeOf(num(g.queueId), typeof g.gameMode === 'string' ? g.gameMode : null, mapId)
   if (mode === null)
     return { skip: tr('mode de jeu non pris en charge', 'game mode not supported') }
+  // Parties jamais comptées : leurs chiffres fausseraient les bilans et l'apprentissage.
+  const gameType = typeof g.gameType === 'string' ? g.gameType : null
+  if (!gameTypeOf(num(g.queueId), mode, gameType)) {
+    const kind = queueKind(num(g.queueId), gameType)
+    return {
+      skip:
+        kind === 'custom'
+          ? tr('partie personnalisée (pas de bilan)', 'custom game (no review)')
+          : kind === 'bots'
+            ? tr('partie contre l’IA (pas de bilan)', 'game against AI (no review)')
+            : kind === 'small'
+              ? tr('partie à moins de 5 contre 5 (pas de bilan)', 'smaller than 5v5 (no review)')
+              : tr('file de jeu inconnue (pas de bilan)', 'unknown queue (no review)')
+    }
+  }
   if (mode === 'sr' && mapId && mapId !== 11)
     return { skip: tr('pas la Faille de l’invocateur', 'not Summoner’s Rift') }
   const duration = num(g.gameDuration) > 20000 ? num(g.gameDuration) / 1000 : num(g.gameDuration)
@@ -706,6 +729,10 @@ export interface GameReport {
   facts: GameFacts
   /** Poste joué. */
   role: Role
+  /** Type de partie (classée, normale, Swiftplay, ARAM…) : les statistiques ne les mélangent pas. */
+  type: GameType | null
+  /** File de la partie (« Classée solo/duo », « Clash »…). */
+  queue: string
   champ: ChampInfo | null
   enemyJungler: ChampInfo | null
   win: boolean
@@ -821,6 +848,10 @@ const MODE_BENCH: Benchmark = {
   dmgShare: 0.2
 }
 for (const m of Object.keys(MODES) as ModeKey[]) DEFAULT_BENCH_BY_ROLE[m] = MODE_BENCH
+
+/** Swiftplay : durée relative des phases de jeu, et morts habituelles par 10 min (sans repère). */
+export const SWIFT_TIME = 0.7
+const SWIFT_DEATHS = 2.4
 
 /** Poids des catégories dans la note : modes sans objectifs ni vision. */
 const MODE_WEIGHTS: Record<Category, number> = {
@@ -1035,6 +1066,15 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
   const jungle = myRole === 'jungle'
   // Modes sans voie (ARAM…) : ni adversaire direct, ni objectifs, ni vision.
   const mode = isMode(myRole) ? MODES[myRole] : null
+  const type = gameTypeOf(facts.queueId, isMode(myRole) ? myRole : 'sr')
+  // Swiftplay : partie accélérée (niveau 3 et 1 400 PO au départ, or et expérience augmentés,
+  // Baron à 12 min). Les repères viennent des joueurs de tes parties Swiftplay (voir modeData) et
+  // les seuils de temps sont raccourcis : 10 min de partie normale ≈ 7 min.
+  const swift = type === 'swift'
+  const T = swift ? SWIFT_TIME : 1
+  const m10 = Math.round(10 * T)
+  const m15 = Math.round(15 * T)
+  const m14 = Math.round(14 * T)
   // Adversaire direct : le jungler adverse, ou le joueur d'en face au même poste.
   const enemyJ = mode
     ? null
@@ -1079,14 +1119,15 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
 
   // --- Farm et avance sur le jungler adverse ---
   const csPerMin = (me.cs + me.jcs) / Math.max(minutes, 1)
-  const cs10 = frameVal(10, meIdx, 2)
-  const cs15 = frameVal(15, meIdx, 2)
-  const csDiff10 = cs10 !== null && enemyJIdx >= 0 ? cs10 - frameVal(10, enemyJIdx, 2)! : null
-  const gold15 = frameVal(15, meIdx, 0)
-  const goldDiff15 = gold15 !== null && enemyJIdx >= 0 ? gold15 - frameVal(15, enemyJIdx, 0)! : null
-  const level15 = frameVal(15, meIdx, 3)
+  const cs10 = frameVal(m10, meIdx, 2)
+  const cs15 = frameVal(m15, meIdx, 2)
+  const csDiff10 = cs10 !== null && enemyJIdx >= 0 ? cs10 - frameVal(m10, enemyJIdx, 2)! : null
+  const gold15 = frameVal(m15, meIdx, 0)
+  const goldDiff15 =
+    gold15 !== null && enemyJIdx >= 0 ? gold15 - frameVal(m15, enemyJIdx, 0)! : null
+  const level15 = frameVal(m15, meIdx, 3)
   const levelDiff15 =
-    level15 !== null && enemyJIdx >= 0 ? level15 - frameVal(15, enemyJIdx, 3)! : null
+    level15 !== null && enemyJIdx >= 0 ? level15 - frameVal(m15, enemyJIdx, 3)! : null
   const ejName = enemyJ
     ? (gd.champions.get(enemyJ.champ)?.label ??
       (jungle
@@ -1158,7 +1199,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         id: 'cs-low',
         cat: 'farm',
         tone: 'bad',
-        title: tr(`Farm faible : ${cs10} cs à 10 min`, `Low farm: ${cs10} CS at 10 min`),
+        title: tr(`Farm faible : ${cs10} cs à ${m10} min`, `Low farm: ${cs10} CS at ${m10} min`),
         detail: bench_(`${Math.round(bench.cs10)} cs`),
         impact: 0.6 + (45 - s) / 100
       })
@@ -1167,12 +1208,15 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         id: 'cs-good',
         cat: 'farm',
         tone: 'good',
-        title: tr(`Très bon farm : ${cs10} cs à 10 min`, `Great farm: ${cs10} CS at 10 min`),
+        title: tr(
+          `Très bon farm : ${cs10} cs à ${m10} min`,
+          `Great farm: ${cs10} CS at ${m10} min`
+        ),
         detail: bench_(`${Math.round(bench.cs10)} cs`),
         impact: 0.5
       })
   } else if (farms) {
-    sub.farm.push(rate(csPerMin, bench.cs15 / 15))
+    sub.farm.push(rate(csPerMin, bench.cs15 / m15))
   }
   if (cs15 !== null && farms) sub.farm.push(rate(cs15, bench.cs15))
   if (goldDiff15 !== null) {
@@ -1183,8 +1227,8 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         cat: 'farm',
         tone: 'bad',
         title: tr(
-          `En retard sur ${ejName} : ${signed(goldDiff15)} à 15 min`,
-          `Behind ${ejName}: ${signed(goldDiff15)} at 15 min`
+          `En retard sur ${ejName} : ${signed(goldDiff15)} à ${m15} min`,
+          `Behind ${ejName}: ${signed(goldDiff15)} at ${m15} min`
         ),
         detail:
           levelDiff15 !== null && levelDiff15 < 0
@@ -1198,8 +1242,8 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         cat: 'farm',
         tone: 'good',
         title: tr(
-          `En avance sur ${ejName} : ${signed(goldDiff15)} à 15 min`,
-          `Ahead of ${ejName}: ${signed(goldDiff15)} at 15 min`
+          `En avance sur ${ejName} : ${signed(goldDiff15)} à ${m15} min`,
+          `Ahead of ${ejName}: ${signed(goldDiff15)} at ${m15} min`
         ),
         impact: 0.5 + Math.min(0.4, goldDiff15 / 5000)
       })
@@ -1256,7 +1300,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
           ),
           impact: 0.4
         })
-    } else if (minutes >= 16) {
+    } else if (minutes >= 16 * T) {
       sub.build.push(15)
       push({
         id: 'first-item-late',
@@ -1415,7 +1459,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
   )
   const grievousBuy = buys.find((b) => gd.items.get(b.id)?.grievous)
   const ownsGrievous = !!grievousBuy || me.items.some((id) => gd.items.get(id)?.grievous)
-  if (preThreat.metrics.heal >= 0.55 && minutes >= 18) {
+  if (preThreat.metrics.heal >= 0.55 && minutes >= 18 * T) {
     const healers = [...foes]
       .sort((a, b) => b.heal - a.heal)
       .slice(0, 2)
@@ -1432,7 +1476,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         detail: tr(`Soins adverses importants (${healers}).`, `Strong enemy healing (${healers}).`),
         impact: 0.7
       })
-    } else if (grievousBuy && grievousBuy.t > 18 * 60) {
+    } else if (grievousBuy && grievousBuy.t > 18 * 60 * T) {
       push({
         id: 'no-antiheal',
         cat: 'build',
@@ -1466,7 +1510,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
   const finalItems = me.items.map((id) => gd.items.get(id)).filter((i): i is ItemInfo => !!i)
   const hasStat = (k: string): boolean =>
     finalItems.some((i) => (i.isLegendary || i.isBoots) && (i.stats[k] ?? 0) > 0)
-  if (me.d >= 6 && minutes >= 20 && build?.archetype !== 'ENCHANTER') {
+  if (me.d >= 6 && minutes >= 20 * T && build?.archetype !== 'ENCHANTER') {
     if (magicShare >= 0.62 && !hasStat('FlatSpellBlockMod'))
       push({
         id: 'no-mr',
@@ -1523,11 +1567,17 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
       })
   }
   const deathsPer10 = (me.d / Math.max(minutes, 1)) * 10
-  // Repère de morts : celui du mode (on meurt bien plus souvent en ARAM), sinon 1,6 / 10 min.
-  const deathsTarget = mode ? (bench.deathsPer10 ?? MODE_BENCH.deathsPer10!) : 1.6
+  // Repère de morts : celui du mode (on meurt bien plus souvent en ARAM) ou des joueurs de tes
+  // parties Swiftplay, sinon 1,6 / 10 min.
+  const deathsTarget = mode
+    ? (bench.deathsPer10 ?? MODE_BENCH.deathsPer10!)
+    : swift
+      ? (bench.deathsPer10 ?? SWIFT_DEATHS)
+      : 1.6
+  const perTen = !!mode || swift
   sub.fights.push(rate(deathsPer10, deathsTarget, true))
   const myDeaths = facts.kills.filter((k) => k[2] === me.pid)
-  const earlyDeaths = myDeaths.filter((k) => k[0] < 14 * 60).length
+  const earlyDeaths = myDeaths.filter((k) => k[0] < 14 * 60 * T).length
   let deathsWithGold = 0
   let worstGold = 0
   if (hasTimeline) {
@@ -1553,7 +1603,10 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         id: 'early-deaths',
         cat: 'fights',
         tone: 'bad',
-        title: tr(`${earlyDeaths} morts avant 14 min`, `${earlyDeaths} deaths before 14 min`),
+        title: tr(
+          `${earlyDeaths} morts avant ${m14} min`,
+          `${earlyDeaths} deaths before ${m14} min`
+        ),
         detail: tr(
           jungle
             ? 'Chaque mort en début de partie donne de l’avance au jungler adverse.'
@@ -1564,12 +1617,12 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         ),
         impact: 0.6 + 0.08 * earlyDeaths
       })
-    } else if (earlyDeaths === 0 && minutes >= 15) {
+    } else if (earlyDeaths === 0 && minutes >= 15 * T) {
       push({
         id: 'safe-early',
         cat: 'fights',
         tone: 'good',
-        title: tr('Aucune mort avant 14 min', 'No death before 14 min'),
+        title: tr(`Aucune mort avant ${m14} min`, `No death before ${m14} min`),
         impact: 0.35
       })
     }
@@ -1590,7 +1643,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         impact: 0.55
       })
   }
-  if (mode ? deathsPer10 >= deathsTarget * 1.5 && me.d >= 8 : me.d >= 9)
+  if (perTen ? deathsPer10 >= deathsTarget * 1.5 && me.d >= 8 : me.d >= 9)
     push({
       id: 'many-deaths',
       cat: 'fights',
@@ -1602,7 +1655,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
       ),
       impact: 0.5 + Math.min(0.3, (me.d - 9) * 0.05)
     })
-  else if (mode ? deathsPer10 <= deathsTarget * 0.6 && minutes >= 12 : me.d <= 2 && minutes >= 22)
+  else if (perTen ? deathsPer10 <= deathsTarget * 0.6 && minutes >= 12 : me.d <= 2 && minutes >= 22)
     push({
       id: 'few-deaths',
       cat: 'fights',
@@ -1680,7 +1733,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
         ),
         impact: 0.5 + (share - 0.65)
       })
-    if (enemy.grubs >= 5 && team.grubs <= 1 && (jungle || myRole === 'top'))
+    if (!swift && enemy.grubs >= 5 && team.grubs <= 1 && (jungle || myRole === 'top'))
       push({
         id: 'grubs-lost',
         cat: 'objectives',
@@ -1710,7 +1763,7 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
     : null
   sub.vision.push(rate(visionPerMin, bench.visionPerMin))
   if (controlWardsPer10 !== null) sub.vision.push(rate(controlWardsPer10, bench.controlWardsPer10))
-  if (controlWardsPer10 !== null && me.controlWards === 0 && minutes >= 20)
+  if (controlWardsPer10 !== null && me.controlWards === 0 && minutes >= 20 * T)
     push({
       id: 'no-control-ward',
       cat: 'vision',
@@ -1765,6 +1818,8 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
   return {
     facts,
     role: myRole,
+    type,
+    queue: queueName(facts.queueId, type, getLang()),
     champ,
     enemyJungler: enemyJ ? (gd.champions.get(enemyJ.champ) ?? null) : null,
     win: me.win,
@@ -1836,8 +1891,25 @@ const MODE_TIPS: Record<string, [string, string]> = {
   ]
 }
 
-export function tipFor(id: string, bench: Benchmark, role: Role = 'jungle'): string | undefined {
-  const tip = (isMode(role) ? MODE_TIPS[id] : undefined) ?? ROLE_TIPS[role]?.[id] ?? TIPS[id]
+/** Conseils propres à Swiftplay (rythme accéléré). */
+const SWIFT_TIPS: Record<string, [string, string]> = {
+  'early-deaths': [
+    'Avant 10 min, ne te bats pas sans vision ni avantage de niveau : en Swiftplay, chaque mort coûte plus cher.',
+    'Before 10 min, don’t fight without vision or a level lead: in Swiftplay, every death costs more.'
+  ]
+}
+
+export function tipFor(
+  id: string,
+  bench: Benchmark,
+  role: Role = 'jungle',
+  type: GameType | null = null
+): string | undefined {
+  const tip =
+    (isMode(role) ? MODE_TIPS[id] : undefined) ??
+    (type === 'swift' ? SWIFT_TIPS[id] : undefined) ??
+    ROLE_TIPS[role]?.[id] ??
+    TIPS[id]
   return tip ? tr(...tip).replace('{first}', fr1(bench.firstItem)) : undefined
 }
 
