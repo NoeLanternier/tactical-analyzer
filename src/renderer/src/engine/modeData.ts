@@ -4,6 +4,7 @@ import {
   DEFAULT_BENCH_BY_ROLE,
   SWIFT_TIME,
   cleanStoredItems,
+  foldEvolutions,
   purchasesOf,
   type GameFacts
 } from './postgame'
@@ -184,7 +185,7 @@ export function swiftBench(facts: GameFacts[], role: Lane, gd: GameData): LobbyB
   let players = 0
   for (const stored of facts) {
     if (gameTypeOf(stored.queueId, 'sr') !== 'swift') continue
-    const f = cleanStoredItems(stored)
+    const f = foldEvolutions(cleanStoredItems(stored), gd)
     const minutes = f.duration / 60
     if (!(minutes >= 5)) continue
     const teamDmg = new Map<number, number>()

@@ -60,6 +60,12 @@ export interface ItemInfo {
   description: string
   isBoots: boolean
   isLegendary: boolean
+  /**
+   * Objet qui évolue en partie, sans achat (Étreinte du séraphin ← Bâton de l'archange, Muramana ←
+   * Manamune, Fimbulwinter ← Approche de l'hiver, Diadème des chants ← Cercle murmurant…) : forme
+   * dont il est issu. Null pour un objet qu'on achète.
+   */
+  evolvesFrom: number | null
   /** Objet dont l'effet réduit les soins adverses (Blessures graves). */
   grievous: boolean
   /** Caractéristiques qui comptent face à lui (voir itemTraits.ts). */
@@ -166,6 +172,12 @@ export function buildGameData(raw: RawGameData): GameData {
   const items = new Map<number, ItemInfo>()
   const itemsByName = new Map<string, ItemInfo>()
   const frItems: Record<string, any> = raw.itemsFr?.data ?? {}
+  const allItems: Record<string, any> = raw.itemsEn?.data ?? {}
+  // Évolution : objet non vendu en boutique dont la « recette spéciale » est un autre objet.
+  const evolutionOf = (x: any): number | null => {
+    const from = Number(x?.specialRecipe)
+    return from > 0 && (x?.inStore === false || x?.gold?.purchasable === false) ? from : null
+  }
   const candidates: { item: ItemInfo; rank: number }[] = []
   for (const [idStr, it] of Object.entries<any>(raw.itemsEn?.data ?? {})) {
     const id = Number(idStr)
@@ -175,6 +187,10 @@ export function buildGameData(raw: RawGameData): GameData {
     const purchasable = it.gold?.purchasable !== false && it.inStore !== false
     const tags: string[] = Array.isArray(it.tags) ? it.tags : []
     const into: number[] = Array.isArray(it.into) ? it.into.map(Number) : []
+    // Un objet qui ne mène qu'à ses propres évolutions (Cercle murmurant → Diadème des chants)
+    // est un objet final : on l'achète terminé, il évolue ensuite tout seul.
+    const intoOnlyEvolutions =
+      into.length > 0 && into.every((x) => evolutionOf(allItems[String(x)]) === id)
     const total = Number(it.gold?.total ?? 0)
     const description = String(it.description ?? '')
     const item: ItemInfo = {
@@ -193,10 +209,11 @@ export function buildGameData(raw: RawGameData): GameData {
       isBoots: tags.includes('Boots') && total >= 900,
       isLegendary:
         (onRift || onAbyss) &&
-        into.length === 0 &&
+        (into.length === 0 || intoOnlyEvolutions) &&
         total >= 2000 &&
         !tags.includes('Consumable') &&
         !tags.includes('Boots'),
+      evolvesFrom: evolutionOf(it),
       grievous: /grievous|blessures graves/i.test(description),
       traits: itemTraits(description, it.stats ?? {})
     }
@@ -224,6 +241,20 @@ export function buildGameData(raw: RawGameData): GameData {
     items,
     itemsByName
   }
+}
+
+/**
+ * Forme achetée d'un objet qui a évolué en partie (Étreinte du séraphin → Bâton de l'archange,
+ * Boussole runique → Atlas du monde…), sinon l'objet lui-même.
+ */
+export function baseItemId(gd: GameData, id: number): number {
+  let cur = id
+  for (let i = 0; i < 5; i++) {
+    const from = gd.items.get(cur)?.evolvesFrom
+    if (!from || !gd.items.has(from)) break
+    cur = from
+  }
+  return cur
 }
 
 async function getJson(url: string): Promise<any> {

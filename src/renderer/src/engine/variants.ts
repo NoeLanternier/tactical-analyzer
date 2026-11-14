@@ -1,7 +1,7 @@
 import type { LivePlayer } from '../../../shared/types'
 import type { BuildVariant, JunglerBuild, SituationContext } from '../data/junglers'
 import type { ItemCounters } from './catalog'
-import type { GameData, ItemInfo } from './gameData'
+import { baseItemId, type GameData, type ItemInfo } from './gameData'
 import { FOE_TRAIT_LABEL } from './itemTraits'
 import { clamp01, norm } from './normalize'
 import { threatWeight, type ThreatProfile } from './threat'
@@ -118,7 +118,10 @@ function startedVariant(
   me: LivePlayer | null
 ): BuildVariant | null {
   if (!me) return null
-  const owned = me.items.map((i) => gd.items.get(i.itemID)).filter((i): i is ItemInfo => !!i)
+  // (objet qui a évolué : sa forme achetée, Étreinte du séraphin → Bâton de l'archange.)
+  const owned = me.items
+    .map((i) => gd.items.get(baseItemId(gd, i.itemID)))
+    .filter((i): i is ItemInfo => !!i)
   const ownedNames = new Set(owned.map((i) => norm(i.name)))
   // 1. Le premier objet de la famille est possédé.
   const byKey = variants.find((v) => ownedNames.has(norm(v.key)))

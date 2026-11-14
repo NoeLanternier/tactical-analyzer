@@ -11,7 +11,7 @@ import {
 } from '../data/items'
 import type { JunglerBuild, SituationContext } from '../data/junglers'
 import type { ItemCounters } from './catalog'
-import type { GameData, ItemInfo } from './gameData'
+import { baseItemId, type GameData, type ItemInfo } from './gameData'
 import { norm } from './normalize'
 import type { ThreatProfile } from './threat'
 import { contextWeights, counterLift, stateWeights } from './variants'
@@ -369,10 +369,19 @@ export function buildItemPlan(
   }
   const m = threat.metrics
 
-  // Inventaire en partie.
+  // Inventaire en partie. Un objet qui a évolué (Bâton de l'archange → Étreinte du séraphin,
+  // Manamune → Muramana, Approche de l'hiver → Fimbulwinter…) compte sous sa forme achetée : le
+  // plan ne le croit pas vendu et ne libère pas sa place. Il s'affiche sous sa forme actuelle.
   const inventory = new Map<number, number>()
-  for (const it of me?.items ?? [])
-    inventory.set(it.itemID, (inventory.get(it.itemID) ?? 0) + Math.max(1, it.count))
+  const evolved = new Map<number, ItemInfo>()
+  for (const it of me?.items ?? []) {
+    const id = baseItemId(gd, it.itemID)
+    if (id !== it.itemID) {
+      const now = gd.items.get(it.itemID)
+      if (now) evolved.set(id, now)
+    }
+    inventory.set(id, (inventory.get(id) ?? 0) + Math.max(1, it.count))
+  }
   const ownsId = (id: number): boolean => (inventory.get(id) ?? 0) > 0
   const ownedItems = [...inventory.keys()]
     .map((id) => gd.items.get(id))
@@ -635,6 +644,9 @@ export function buildItemPlan(
   for (const s of steps)
     if (s.kind === 'antiheal' && ownedItems.some((i) => i.grievous || i.from.includes(s.item.id)))
       s.owned = true
+
+  // Objet acheté qui a évolué : affiché sous sa forme actuelle.
+  for (const s of steps) if (s.owned && evolved.has(s.item.id)) s.item = evolved.get(s.item.id)!
 
   // Affichage : ce qui est déjà acheté d'abord, puis la suite dans l'ordre conseillé.
   const ordered = [...steps.filter((s) => s.owned), ...steps.filter((s) => !s.owned)]

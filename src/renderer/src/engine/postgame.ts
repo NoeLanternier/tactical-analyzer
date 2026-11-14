@@ -1,6 +1,6 @@
 import type { GameJournal, LiveGameData, LivePlayer, RawPostGame } from '../../../shared/types'
 import { getBuild, type AugmentInfo, type Benchmark, type Catalog } from './catalog'
-import type { ChampInfo, GameData, ItemInfo } from './gameData'
+import { baseItemId, type ChampInfo, type GameData, type ItemInfo } from './gameData'
 import { buildItemPlan, type ItemPlan } from './items'
 import { chooseVariant } from './variants'
 import { adaptChoices } from './choices'
@@ -547,6 +547,69 @@ export function journalMatchesFinalItems(
   return extra + missing <= 1
 }
 
+/** Délai maximal entre la perte d'un objet et l'apparition de son évolution (même relevé). */
+const EVOLUTION_WINDOW = 10
+
+/**
+ * Évolutions d'objets (Bâton de l'archange → Étreinte du séraphin, Manamune → Muramana, Approche
+ * de l'hiver → Fimbulwinter, Atlas du monde → Boussole runique…) : dans le journal ou la
+ * chronologie, l'objet acheté disparaît et sa nouvelle forme apparaît, comme une vente suivie d'un
+ * achat. Ce n'est ni l'un ni l'autre : on garde l'objet acheté dans l'inventaire (sous sa forme
+ * achetée) et l'évolution ne compte pas comme un achat (rythme d'achat, conformité au conseil,
+ * résultats par objet). Une vente de la forme évoluée retire la forme achetée.
+ */
+export function foldEvolutions(facts: GameFacts, gd: GameData): GameFacts {
+  const evo = (id: number): number | null => gd.items.get(id)?.evolvesFrom ?? null
+  const finalEvolved = facts.players.some((p) => p.items.some((id) => evo(id)))
+  if (!finalEvolved && !facts.items.some(([, , id]) => evo(id))) return facts
+  const root = (id: number): number => baseItemId(gd, id)
+  // Apparitions d'une forme évoluée : [instant, joueur, objet dont elle est issue].
+  const gains = facts.items
+    .filter(([, , id, op]) => op === 1 && evo(id))
+    .map(([t, pid, id]) => ({ t, pid, from: evo(id)!, used: false }))
+  const out: [number, number, number, number][] = []
+  for (const [t, pid, id, op] of facts.items) {
+    const from = evo(id)
+    if (from) {
+      // Apparition par évolution, ou achat annulé d'une forme qui ne s'achète pas : ignorés.
+      if (op === 1 || op === 2) continue
+      // Vente (ou vente annulée) de la forme évoluée : c'est la forme achetée qui part (revient).
+      out.push([t, pid, root(id), op])
+      continue
+    }
+    if (op === 0) {
+      const g = gains.find(
+        (x) => !x.used && x.pid === pid && x.from === id && Math.abs(x.t - t) <= EVOLUTION_WINDOW
+      )
+      if (g) {
+        g.used = true
+        continue
+      }
+    }
+    out.push([t, pid, id, op])
+  }
+  // Chronologie sans l'apparition de la forme évoluée (seule la disparition est notée) : objet
+  // évolué en fin de partie mais absent de l'inventaire rejoué → sa dernière « vente » est annulée.
+  for (const p of facts.players)
+    for (const id of p.items) {
+      if (!evo(id)) continue
+      const base = root(id)
+      const chain = new Set<number>()
+      for (let cur = evo(id), d = 0; cur && d < 5; cur = evo(cur), d++) chain.add(cur)
+      for (let guard = 0; guard < 5; guard++) {
+        let n = 0
+        for (const [, who, x, op] of out)
+          if (who === p.pid && x === base) n += op === 1 || op === 3 ? 1 : -1
+        if (n > 0) break
+        let i = out.length - 1
+        while (i >= 0 && !(out[i][1] === p.pid && out[i][3] === 0 && chain.has(out[i][2]))) i--
+        if (i < 0) break
+        out.splice(i, 1)
+      }
+    }
+  return { ...facts, items: out }
+}
+
 // --- Rejeu ------------------------------------------------------------------------------------
 
 /** Inventaire d'un joueur à un instant donné, reconstitué à partir des achats et ventes. */
@@ -1056,7 +1119,7 @@ export function repairStoredRoles(facts: GameFacts): GameFacts {
 }
 
 export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): GameReport {
-  const facts = cleanStoredItems(stored)
+  const facts = foldEvolutions(cleanStoredItems(stored), gd)
   const me = facts.players.find((p) => p.pid === facts.me)!
   const meIdx = facts.players.indexOf(me)
   const champ = gd.champions.get(me.champ) ?? null
@@ -1262,8 +1325,9 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
     legendaryTimes.push(b.t)
   }
   if (!hasItems) {
-    // Sans journal : objets de fin de partie.
-    for (const id of me.items) {
+    // Sans journal : objets de fin de partie (sous leur forme achetée s'ils ont évolué).
+    for (const final of me.items) {
+      const id = baseItemId(gd, final)
       const it = gd.items.get(id)
       if (it?.isLegendary && !seen.has(id)) {
         seen.add(id)
