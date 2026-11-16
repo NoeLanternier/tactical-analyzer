@@ -23,7 +23,7 @@ function usedGain(bt: NextBacktest, model?: NextModel): NextGain | null {
 }
 
 /**
- * Preuve hors échantillon de l'objet suivant (4e au 6e objet) : conseils de la méta de la veille
+ * Preuve hors échantillon de l'objet suivant (3e au 6e objet) : conseils de la méta de la veille
  * jugés sur les parties Master+ du lendemain, à or égal (voir tactique-meta, src/nextItems.mjs).
  */
 export function NextProof({
@@ -41,8 +41,8 @@ export function NextProof({
     return (
       <p className="mb-2 text-[10px] leading-snug text-slate-500">
         {tr(
-          'Objet suivant (4e au 6e objet) : la vérification sur les parties du lendemain commence après deux collectes.',
-          'Next item (4th to 6th item): checking against the next day’s games starts after two collections.'
+          'Objet suivant (3e au 6e objet) : la vérification sur les parties du lendemain commence après deux collectes.',
+          'Next item (3rd to 6th item): checking against the next day’s games starts after two collections.'
         )}
       </p>
     )
@@ -52,8 +52,8 @@ export function NextProof({
     return (
       <div className="text-[10px] leading-snug text-slate-400">
         {tr(
-          `Objets 4 à 6, vérifiés sur les parties collectées du lendemain (${fmtNumber(total)} achats) : suivre le conseil donne `,
-          `Items 4 to 6, checked on the next day’s collected games (${fmtNumber(total)} purchases): following the advice gives `
+          `Objets 3 à 6, vérifiés sur les parties collectées du lendemain (${fmtNumber(total)} achats) : suivre le conseil donne `,
+          `Items 3 to 6, checked on the next day’s collected games (${fmtNumber(total)} purchases): following the advice gives `
         )}
         <b className={tone(g)}>{pts(g.gain)}</b>
         {tr(' de victoires à or égal.', ' win rate at equal gold.')}
@@ -63,8 +63,8 @@ export function NextProof({
     <div className="mb-2 text-[10px] leading-snug text-slate-400">
       <p className="mb-1 text-slate-500">
         {tr(
-          `Objet suivant (4e au 6e objet) : conseils de la veille jugés sur ${fmtNumber(bt.decisions)} achats du lendemain, à or égal (victoires en plus de ce que l’avance ou le retard laissait attendre).`,
-          `Next item (4th to 6th item): the previous day’s advice judged on ${fmtNumber(bt.decisions)} purchases from the next day, at equal gold (wins above what the lead or deficit predicted).`
+          `Objet suivant (3e au 6e objet) : conseils de la veille jugés sur ${fmtNumber(bt.decisions)} achats du lendemain, à or égal (victoires en plus de ce que l’avance ou le retard laissait attendre).`,
+          `Next item (3rd to 6th item): the previous day’s advice judged on ${fmtNumber(bt.decisions)} purchases from the next day, at equal gold (wins above what the lead or deficit predicted).`
         )}
       </p>
       <p>

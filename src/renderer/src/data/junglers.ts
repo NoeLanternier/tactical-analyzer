@@ -69,16 +69,25 @@ export interface JunglerBuild {
   choices?: BuildChoices
   /** ARAM Mayhem : augments choisis avec ce champion (méta du mode), du meilleur au moins bon. */
   augments?: AugmentStat[]
-  /** Objet suivant (4e au 6e objet), mesuré à avance égale (méta distante, voir engine/nextItems). */
+  /** Objet suivant (3e au 6e objet), mesuré à avance égale (méta distante, voir engine/nextItems). */
   next?: NextStats
+  /**
+   * Moment des bottes retenu pour la partie (voir engine/choices) : avant le 1er objet légendaire,
+   * entre le 1er et le 2e, ou après. Absent : après le 1er objet.
+   */
+  bootsTiming?: BootsTiming
 }
 
+/** Moment des bottes : avant le 1er objet (early), entre le 1er et le 2e (first), après (later). */
+export type BootsTiming = 'early' | 'first' | 'later'
+
 /**
- * Objet suivant : chaque achat du 4e au 6e objet comparé aux autres décisions prises au même
+ * Objet suivant : chaque achat du 3e au 6e objet comparé aux autres décisions prises au même
  * moment (victoires en plus par rapport à l'attente selon l'écart d'or). Noms d'objets anglais.
  * - base : objet → [achats, écart lissé, part des achats] ;
  * - after : objet possédé → { t : achats après lui, i : objet → [achats, interaction, part] } ;
- * - ctx : contexte (ap, ad, heal, tank, cc, ahead, behind) → objet → [achats, interaction].
+ * - ctx : contexte (ap, ad, heal, tank, cc, allyAp, allyAd, ahead, behind, fedAp, fedAd) → objet →
+ *   [achats, interaction].
  */
 export interface NextStats {
   n: number
@@ -102,18 +111,28 @@ export interface ChoiceStats {
   winRate: number
   share: number
   contexts: Partial<Record<SituationContext, [number, number]>>
+  /**
+   * Face à l'adversaire direct (jungler adverse, ou joueur d'en face) : [parties, écart propre déjà
+   * lissé], l'effet de cet adversaire sur le champion retiré. Seulement les écarts établis.
+   */
+  opp?: Record<string, [number, number]>
 }
 export type RuneChoice = ChoiceStats & { runes: RuneSpec }
 export type NamedChoice = ChoiceStats & { name: string }
 /** Familier : aussi selon le jungler adverse ([parties, taux]). */
 export type PetChoice = NamedChoice & { vs: Record<string, [number, number]> }
 export type SkillChoice = ChoiceStats & { value: string }
+/** Départ : objets achetés en début de partie (noms anglais). */
+export type StartChoice = ChoiceStats & { items: string[] }
+export type BootsTimingChoice = ChoiceStats & { value: BootsTiming }
 
 export interface BuildChoices {
   runes?: RuneChoice[]
   boots?: NamedChoice[]
   pet?: PetChoice[]
   skills?: SkillChoice[]
+  start?: StartChoice[]
+  bootsT?: BootsTimingChoice[]
 }
 
 /** Une famille de build d'un champion : tout ce qui change selon le premier objet. */
@@ -135,14 +154,17 @@ export interface BuildVariant {
   contexts: Partial<Record<SituationContext, [number, number]>>
   /** Pages de runes courantes de cette famille, mesurées par contexte. */
   runeChoices?: RuneChoice[]
+  /** Face à l'adversaire direct : [parties, écart propre déjà lissé] (voir ChoiceStats.opp). */
+  opp?: Record<string, [number, number]>
 }
 
-/** Contextes adverses mesurés par le pipeline : tous, très AP, très AD, soins, tanky, contrôles. */
 /**
- * Contextes mesurés : composition adverse (très AP, très AD, soins, résistante, contrôles) et, pour
- * les objets, avance ou retard de l'équipe au moment de l'achat.
+ * Contextes mesurés : composition adverse (très AP, très AD, soins, résistante, contrôles),
+ * composition de sa propre équipe (alliés surtout magiques : allyAp, surtout physiques : allyAd)
+ * et, pour les objets, avance ou retard de l'équipe au moment de l'achat.
  */
-export type SituationContext = 'all' | 'ap' | 'ad' | 'heal' | 'tank' | 'cc' | 'ahead' | 'behind'
+export type SituationContext =
+  'all' | 'ap' | 'ad' | 'heal' | 'tank' | 'cc' | 'allyAp' | 'allyAd' | 'ahead' | 'behind'
 
 export interface SituationalStats {
   /** Nombre de parties du champion dans ce contexte. */

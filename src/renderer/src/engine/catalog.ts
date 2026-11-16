@@ -9,6 +9,8 @@ import {
   type PetChoice,
   type RuneChoice,
   type SkillChoice,
+  type StartChoice,
+  type BootsTimingChoice,
   type RuneSpec,
   type SituationContext
 } from '../data/junglers'
@@ -403,7 +405,16 @@ function parseStartOptions(raw: any): JunglerBuild['startOptions'] {
 
 const num = (x: any): number | null => (typeof x === 'number' && Number.isFinite(x) ? x : null)
 
-const CONTEXT_KEYS: SituationContext[] = ['all', 'ap', 'ad', 'heal', 'tank', 'cc']
+const CONTEXT_KEYS: SituationContext[] = [
+  'all',
+  'ap',
+  'ad',
+  'heal',
+  'tank',
+  'cc',
+  'allyAp',
+  'allyAd'
+]
 /** Contextes des objets : composition adverse, et avance ou retard au moment de l'achat. */
 const ITEM_CONTEXT_KEYS: SituationContext[] = [...CONTEXT_KEYS, 'ahead', 'behind']
 
@@ -594,8 +605,10 @@ function parseVariants(raw: any): BuildVariant[] | undefined {
       if (Array.isArray(c) && num(c[0]) !== null && num(c[1]) !== null) contexts[ctx] = [c[0], c[1]]
     }
     const runeChoices = parseRuneChoices(v.runeChoices)
+    const opp = parseOpp(v.opp)
     out.push({
       ...(runeChoices ? { runeChoices } : {}),
+      ...(opp ? { opp } : {}),
       key: v.key,
       archetype: v.archetype,
       pet: v.pet,
@@ -613,6 +626,16 @@ function parseVariants(raw: any): BuildVariant[] | undefined {
   return out.length >= 2 ? out : undefined
 }
 
+/** Écarts face à l'adversaire direct : { champion: [parties, écart] }, écarts bornés à ±5 points. */
+function parseOpp(raw: any): Record<string, [number, number]> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: Record<string, [number, number]> = {}
+  for (const [k, v] of Object.entries<any>(raw))
+    if (Array.isArray(v) && num(v[0]) !== null && num(v[1]) !== null)
+      out[k] = [v[0], Math.max(-0.05, Math.min(0.05, v[1]))]
+  return Object.keys(out).length ? out : undefined
+}
+
 /** Champs communs d'une option mesurée, ou null si invalide. */
 function parseChoiceStats(x: any): ChoiceStats | null {
   if (!x || num(x.games) === null || num(x.winRate) === null || num(x.share) === null) return null
@@ -621,7 +644,8 @@ function parseChoiceStats(x: any): ChoiceStats | null {
     const c = x.contexts?.[ctx]
     if (Array.isArray(c) && num(c[0]) !== null && num(c[1]) !== null) contexts[ctx] = [c[0], c[1]]
   }
-  return { games: x.games, winRate: x.winRate, share: x.share, contexts }
+  const opp = parseOpp(x.opp)
+  return { games: x.games, winRate: x.winRate, share: x.share, contexts, ...(opp ? { opp } : {}) }
 }
 
 const isRuneSpec = (r: any): r is RuneSpec =>
@@ -672,6 +696,27 @@ function parseChoices(raw: any): BuildChoices | undefined {
       })
     : []
   if (skills.length >= 2) out.skills = skills
+  const start: StartChoice[] = Array.isArray(raw.start)
+    ? raw.start.flatMap((x: any) => {
+        const st = parseChoiceStats(x)
+        return st &&
+          Array.isArray(x.items) &&
+          x.items.length > 0 &&
+          x.items.every((i: unknown) => typeof i === 'string')
+          ? [{ ...st, items: x.items }]
+          : []
+      })
+    : []
+  if (start.length >= 2) out.start = start
+  const bootsT: BootsTimingChoice[] = Array.isArray(raw.bootsT)
+    ? raw.bootsT.flatMap((x: any) => {
+        const st = parseChoiceStats(x)
+        return st && ['early', 'first', 'later'].includes(x.value)
+          ? [{ ...st, value: x.value }]
+          : []
+      })
+    : []
+  if (bootsT.length >= 2) out.bootsT = bootsT
   return Object.keys(out).length ? out : undefined
 }
 

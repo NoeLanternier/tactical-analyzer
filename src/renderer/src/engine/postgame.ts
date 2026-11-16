@@ -1401,7 +1401,8 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
       meLive,
       catalog.itemCounters,
       catalog.tuning,
-      catalog.priors
+      catalog.priors,
+      directFoe
     )
     const b = found?.generic
       ? variant.build

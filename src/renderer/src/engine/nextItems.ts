@@ -2,7 +2,7 @@ import type { NextStats } from '../data/junglers'
 import type { ThreatProfile } from './threat'
 import { contextWeights, stateWeights } from './variants'
 
-// Objet suivant (4e au 6e objet) : même estimation que la collecte (tactique-meta,
+// Objet suivant (3e au 6e objet) : même estimation que la collecte (tactique-meta,
 // src/nextItems.mjs), qui la vérifie chaque nuit sur les parties du lendemain.
 //
 // Pour un objet candidat : son écart propre pour le champion (victoires en plus par achat à avance
@@ -93,10 +93,13 @@ export const nextScore = (e: NextEstimate, model: NextModel): number =>
 
 /**
  * Contextes de la partie pour l'objet suivant, avec leur poids de 0 à 1 : composition adverse
- * (dégâts magiques ou physiques, soins, résistance, contrôles), et en partie, avance ou retard.
+ * (dégâts magiques ou physiques, soins, résistance, contrôles) et alliée, et en partie, avance ou
+ * retard et adversaire très en avance (fedAp : dégâts surtout magiques, fedAd : physiques).
  */
 export function nextContexts(threat: ThreatProfile): [string, number][] {
-  const w = { ...contextWeights(threat), ...stateWeights(threat) }
+  const m = threat.metrics
+  const fed = threat.live ? { fedAp: m.fedAp, fedAd: m.fedAd } : {}
+  const w = { ...contextWeights(threat), ...stateWeights(threat), ...fed }
   return (Object.entries(w) as [string, number][]).filter(([, x]) => x > 0)
 }
 

@@ -75,7 +75,11 @@ function EngineCard({ t }: { t: TactiqueState }): ReactElement | null {
                 [tr('Page de runes', 'Rune page'), priors.runes],
                 [tr('Bottes', 'Boots'), priors.boots],
                 [tr('Objet à son rang', 'Item at its rank'), priors.slot],
-                [tr('Choix selon l’adversaire', 'Choice vs enemy team'), priors.choiceCtx]
+                [tr('Choix selon l’adversaire', 'Choice vs enemy team'), priors.choiceCtx],
+                [
+                  tr('Choix face à l’adversaire direct', 'Choice vs direct opponent'),
+                  priors.choiceVs
+                ]
               ] as [string, number][]
             ).map(([label, k]) => (
               <li key={label} className="flex justify-between">

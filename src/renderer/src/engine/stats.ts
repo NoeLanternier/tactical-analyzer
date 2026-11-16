@@ -27,6 +27,10 @@ export interface Priors {
   pet: number
   /** Choix (runes, bottes…) selon la composition adverse. */
   choiceCtx: number
+  /** Moment des bottes (avant le 1er objet, entre le 1er et le 2e, après). */
+  bootsT: number
+  /** Choix (départ, bottes, clé de voûte, famille…) face à l'adversaire direct. */
+  choiceVs: number
   /** Objet comparé aux autres objets achetés au même rang. */
   slot: number
   /** Points de taux gagnés quand la part d'une option double. */
@@ -49,6 +53,8 @@ export const DEFAULT_PRIORS: Priors = {
   start: 5000,
   pet: 10000,
   choiceCtx: 3000,
+  bootsT: 3000,
+  choiceVs: 5000,
   slot: 1000,
   slope: { item: 0.003, skills: 0.003, start: 0.003 }
 }

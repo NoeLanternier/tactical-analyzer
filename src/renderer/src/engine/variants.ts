@@ -1,7 +1,7 @@
 import type { LivePlayer } from '../../../shared/types'
 import type { BuildVariant, JunglerBuild, SituationContext } from '../data/junglers'
 import type { ItemCounters } from './catalog'
-import { baseItemId, type GameData, type ItemInfo } from './gameData'
+import { baseItemId, type ChampInfo, type GameData, type ItemInfo } from './gameData'
 import { FOE_TRAIT_LABEL } from './itemTraits'
 import { clamp01, norm } from './normalize'
 import { threatWeight, type ThreatProfile } from './threat'
@@ -33,18 +33,24 @@ export interface VariantChoice {
 }
 
 /**
- * Poids de chaque contexte de composition adverse dans cette partie (familles de build, choix de
- * runes, score des objets).
+ * Poids de chaque contexte de composition dans cette partie (familles de build, choix de runes,
+ * score des objets) : composition adverse, et composition de sa propre équipe (la collecte classe
+ * « alliés surtout magiques » à partir de 55 % de dégâts magiques, « surtout physiques » sous 35 %).
  */
 export function contextWeights(threat: ThreatProfile): Partial<Record<SituationContext, number>> {
-  if (threat.enemies.length === 0) return {}
+  const ally = threat.allyDamage
+  const allies: Partial<Record<SituationContext, number>> = ally
+    ? { allyAp: clamp01((ally.ap - 0.45) / 0.2), allyAd: clamp01((0.45 - ally.ap) / 0.2) }
+    : {}
+  if (threat.enemies.length === 0) return allies
   const m = threat.metrics
   return {
     ap: clamp01((m.ap - 0.5) / 0.3),
     ad: clamp01((m.ad - 0.5) / 0.3),
     heal: m.heal,
     tank: m.tanky,
-    cc: m.cc
+    cc: m.cc,
+    ...allies
   }
 }
 
@@ -67,7 +73,9 @@ export const CONTEXT_LABEL: Partial<Record<SituationContext, [string, string]>> 
   ad: ['vs AD', 'vs AD'],
   heal: ['vs soins', 'vs healing'],
   tank: ['vs tanks', 'vs tanks'],
-  cc: ['vs contrôles', 'vs CC']
+  cc: ['vs contrôles', 'vs CC'],
+  allyAp: ['avec alliés AP', 'with AP allies'],
+  allyAd: ['avec alliés AD', 'with AD allies']
 }
 
 /**
@@ -166,7 +174,9 @@ export function chooseVariant(
   me: LivePlayer | null,
   counters?: ItemCounters,
   tuning?: EngineTuning,
-  priors: Priors = DEFAULT_PRIORS
+  priors: Priors = DEFAULT_PRIORS,
+  /** Adversaire direct (jungler adverse, ou joueur d'en face sur la voie). */
+  opponent: ChampInfo | null = null
 ): VariantChoice {
   const variants = build.variants ?? []
   if (variants.length < 2) return { build, chosen: null, options: [], locked: false, reason: null }
@@ -176,6 +186,9 @@ export function chooseVariant(
   const allyAp = threat.allyDamage?.ap ?? null
   const reasons = new Map<BuildVariant, string>()
   const topShare = Math.max(0.01, ...variants.map((v) => v.share))
+  // Familles mesurées selon la composition alliée : la mesure remplace la règle des dégâts qui
+  // manquent à l'équipe.
+  const allyMeasured = variants.some((v) => v.contexts.allyAp || v.contexts.allyAd)
 
   const options = variants
     .map((v) => {
@@ -206,13 +219,19 @@ export function chooseVariant(
       const counter = v.core.reduce((s, item) => s + counterLift(item, threat, counters).lift, 0)
       estimate += (0.5 * tw(tuning, 'counter') * counter) / v.core.length
 
-      // Dégâts qui manquent à l'équipe.
+      // Face à l'adversaire direct (écart propre mesuré, déjà lissé).
+      const vs = opponent ? (v.opp?.[opponent.id]?.[1] ?? 0) : 0
+      estimate += tw(tuning, 'famCtx') * vs
+      if (opponent && vs >= 0.003 && vs * tw(tuning, 'famCtx') > (bestCtx?.value ?? 0.002))
+        bestCtx = { label: `vs ${opponent.label}`, rate: v.winRate + vs, value: vs }
+
+      // Dégâts qui manquent à l'équipe (règle, tant que la méta ne les mesure pas).
       const coreItems = v.core
         .map((n) => gd.itemsByName.get(norm(n)))
         .filter((i): i is ItemInfo => !!i)
       const apItems = coreItems.filter((i) => (i.stats.FlatMagicDamageMod ?? 0) > 0).length
       const apShare = coreItems.length ? apItems / coreItems.length : 0.5
-      if (allyAp !== null) {
+      if (allyAp !== null && !allyMeasured) {
         if ((allyAp < 0.3 && apShare >= 0.67) || (allyAp > 0.7 && apShare <= 0.34)) estimate += 0.01
         else if ((allyAp < 0.3 && apShare <= 0.34) || (allyAp > 0.7 && apShare >= 0.67))
           estimate -= 0.005

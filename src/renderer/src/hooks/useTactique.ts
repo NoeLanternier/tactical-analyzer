@@ -552,23 +552,6 @@ export function useTactique(): TactiqueState {
   )
   const me = useMemo(() => (gd ? findMe(gd, live, champ?.id ?? null) : null), [gd, live, champ])
 
-  // Famille de build (ex. crit ou létalité) : choisie selon la partie, puis suivie une fois commencée.
-  const variant = useMemo(
-    () =>
-      gd && baseBuild && threat
-        ? chooseVariant(
-            gd,
-            baseBuild,
-            threat,
-            me,
-            catalog.itemCounters,
-            catalog.tuning,
-            catalog.priors
-          )
-        : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
-    [gd, baseBuild, threat, me, catalog.itemCounters, catalog.tuning, catalog.priors, lang]
-  )
   // Jungler adverse (sélection ou partie) et adaptation des runes, bottes, familier et compétences.
   // Adversaire direct : en partie, l'adversaire au même poste (quand le jeu le donne) ; sinon celui
   // qui joue le plus souvent ce poste parmi les adversaires visibles.
@@ -586,6 +569,34 @@ export function useTactique(): TactiqueState {
       threat.enemies.map((e) => e.champ)
     )
   }, [catalog, threat, gd, live, liveMe, role])
+  // Famille de build (ex. crit ou létalité) : choisie selon la partie, puis suivie une fois commencée.
+  const variant = useMemo(
+    () =>
+      gd && baseBuild && threat
+        ? chooseVariant(
+            gd,
+            baseBuild,
+            threat,
+            me,
+            catalog.itemCounters,
+            catalog.tuning,
+            catalog.priors,
+            enemyJungler
+          )
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
+    [
+      gd,
+      baseBuild,
+      threat,
+      me,
+      catalog.itemCounters,
+      catalog.tuning,
+      catalog.priors,
+      enemyJungler,
+      lang
+    ]
+  )
   const adapted = useMemo(() => {
     const b = variant?.build ?? baseBuild
     if (!b) return null

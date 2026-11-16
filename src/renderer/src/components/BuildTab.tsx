@@ -353,15 +353,22 @@ const CHOICE_LABEL: Record<string, [string, string]> = {
   runes: ['Runes', 'Runes'],
   boots: ['Bottes', 'Boots'],
   pet: ['Familier', 'Pet'],
-  skills: ['Compétences', 'Skills']
+  skills: ['Compétences', 'Skills'],
+  start: ['Départ', 'Start'],
+  bootsT: ['Bottes', 'Boots']
 }
 
-/** Runes, bottes, familier ou compétences changés pour cette partie, et pourquoi. */
+/** Runes, bottes, familier, compétences ou départ changés pour cette partie, et pourquoi. */
 function ChoiceNotes({ t }: { t: TactiqueState }): ReactElement | null {
   if (!t.choiceNotes.length || !t.gd) return null
   const gd = t.gd
+  const item = (name: string): string => gd.itemsByName.get(norm(name))?.label ?? name
   const label = (kind: string, value: string): string =>
-    kind === 'boots' || kind === 'pet' ? (gd.itemsByName.get(norm(value))?.label ?? value) : value
+    kind === 'boots' || kind === 'pet'
+      ? item(value)
+      : kind === 'start'
+        ? value.split(' + ').map(item).join(' + ')
+        : value
   return (
     <div className="rounded border border-white/10 bg-white/5 p-2 text-[10px] leading-snug text-slate-400">
       <span className="text-slate-300">

@@ -1,4 +1,6 @@
 import type {
+  BootsTiming,
+  BootsTimingChoice,
   ChoiceStats,
   JunglerBuild,
   NamedChoice,
@@ -6,7 +8,8 @@ import type {
   RuneChoice,
   RuneSpec,
   SituationContext,
-  SkillChoice
+  SkillChoice,
+  StartChoice
 } from '../data/junglers'
 import type { Pet } from '../data/junglers'
 import type { Catalog, DuelPeriod } from './catalog'
@@ -16,17 +19,17 @@ import type { ThreatProfile } from './threat'
 import { CONTEXT_LABEL, contextWeights } from './variants'
 import { tw, type EngineTuning } from './tuning'
 import { DEFAULT_PRIORS, shrunk as bayes, type Priors } from './stats'
-import { fmtPct, tr } from '../../../shared/i18n'
+import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
 
-// Runes, bottes, familier et ordre des compétences choisis selon la partie, à partir des options
-// courantes mesurées par la collecte (méta distante). Le choix du build reste la référence : une
-// autre option ne le remplace que si son avantage dans des parties qui ressemblent à celle-ci
-// (contextes adverses, jungler adverse pour le familier) est établi. Chaque écart est lissé avec la
-// force mesurée pour ce type de choix (voir stats.ts) : tant que les données ne distinguent pas
-// l'effet d'un contexte du hasard, le choix habituel est gardé.
+// Runes, bottes, familier, ordre des compétences, départ et moment des bottes choisis selon la
+// partie, à partir des options courantes mesurées par la collecte (méta distante). Le choix du
+// build reste la référence : une autre option ne le remplace que si son avantage dans des parties
+// qui ressemblent à celle-ci (composition adverse et alliée, adversaire direct) est établi.
+// Chaque écart est lissé avec la force mesurée pour ce type de choix (voir stats.ts) : tant que
+// les données ne distinguent pas l'effet d'un contexte du hasard, le choix habituel est gardé.
 
 export interface ChoiceNote {
-  kind: 'runes' | 'boots' | 'pet' | 'skills'
+  kind: 'runes' | 'boots' | 'pet' | 'skills' | 'start' | 'bootsT'
   /** Option retenue (nom affichable). */
   label: string
   reason: string
@@ -119,9 +122,18 @@ const why = (s: Scored<unknown>, extra?: string): string =>
     ? `${tr('meilleur', 'best')} ${s.bestCtx.label} (${fmtPct(s.bestCtx.rate, 1)})`
     : `${fmtPct(s.estimate, 1)} ${tr('estimé', 'estimated')}`)
 
+/** Libellé du moment des bottes (« bottes » + libellé). */
+export const bootsTimingLabel = (t: BootsTiming): string =>
+  t === 'early'
+    ? tr('avant le 1er objet', 'before the 1st item')
+    : t === 'first'
+      ? tr('après le 1er objet', 'after the 1st item')
+      : tr('après le 2e objet', 'after the 2nd item')
+
 /**
- * Adapte les runes, les bottes, le familier et l'ordre des compétences du build à la partie.
- * `runeChoices` : pages de la famille de build suivie (sinon celles du champion).
+ * Adapte les runes, les bottes, le familier, l'ordre des compétences, le départ et le moment des
+ * bottes du build à la partie. `runeChoices` : pages de la famille de build suivie (sinon celles du
+ * champion). `enemyJungler` : adversaire direct (jungler adverse, ou joueur d'en face).
  */
 export function adaptChoices(
   build: JunglerBuild,
@@ -139,6 +151,14 @@ export function adaptChoices(
   const notes: ChoiceNote[] = []
   const next: JunglerBuild = { ...build }
   const kOf = (base: number): { base: number; ctx: number } => ({ base, ctx: priors.choiceCtx })
+  // Face à l'adversaire direct : écart propre mesuré (déjà lissé par la collecte).
+  const opp = (c: ChoiceStats): number => (enemyJungler ? (c.opp?.[enemyJungler.id]?.[1] ?? 0) : 0)
+  const oppExtra = (c: ChoiceStats): number => opp(c)
+  /** Raison « vs adversaire » quand c'est lui qui fait la différence. */
+  const vsReason = (c: ChoiceStats): string | undefined =>
+    enemyJungler && opp(c) >= 0.003
+      ? `vs ${enemyJungler.label} (+${fmtNumber(opp(c) * 100, 1)} ${tr('pt', 'pts')})`
+      : undefined
 
   // Pages de runes d'une famille de build : comparées au taux de la famille.
   const runes = pick(
@@ -147,12 +167,16 @@ export function adaptChoices(
     weights,
     runeChoices ? (build.winRate ?? prior) : prior,
     kOf(priors.runes),
-    undefined,
+    oppExtra,
     tuning
   )
   if (runes) {
     next.runes = runes.choice.runes
-    notes.push({ kind: 'runes', label: runes.choice.runes.keystone, reason: why(runes) })
+    notes.push({
+      kind: 'runes',
+      label: runes.choice.runes.keystone,
+      reason: why(runes, vsReason(runes.choice))
+    })
   }
 
   const boots = pick<NamedChoice>(
@@ -161,18 +185,23 @@ export function adaptChoices(
     weights,
     prior,
     kOf(priors.boots),
-    undefined,
+    oppExtra,
     tuning
   )
   if (boots) {
     next.boots = boots.choice.name
     // Bottes choisies d'après les parties de ce contexte : les règles ne les changent plus.
     next.bootsLocked = true
-    notes.push({ kind: 'boots', label: boots.choice.name, reason: why(boots) })
+    notes.push({
+      kind: 'boots',
+      label: boots.choice.name,
+      reason: why(boots, vsReason(boots.choice))
+    })
   }
 
-  // Familier : aussi selon le jungler adverse.
+  // Familier : aussi selon le jungler adverse (écart propre mesuré ; taux brut des métas anciennes).
   const vsBonus = (c: PetChoice, base: number): number => {
+    if (c.opp) return opp(c)
     const cell = enemyJungler ? c.vs[enemyJungler.id] : undefined
     return cell ? bayes(cell[0], cell[1], base, priors.choiceCtx) - base : 0
   }
@@ -193,9 +222,11 @@ export function adaptChoices(
       label: pet.choice.name,
       reason: why(
         pet,
-        cell && enemyJungler && vsBonus(pet.choice, pet.base) > 0.002
-          ? `${fmtPct(cell[1], 1)} vs ${enemyJungler.label}`
-          : undefined
+        pet.choice.opp
+          ? vsReason(pet.choice)
+          : cell && enemyJungler && vsBonus(pet.choice, pet.base) > 0.002
+            ? `${fmtPct(cell[1], 1)} vs ${enemyJungler.label}`
+            : undefined
       )
     })
   }
@@ -216,6 +247,53 @@ export function adaptChoices(
       label: skills.choice.value.replace(/>/g, ' > '),
       reason: why(skills)
     })
+  }
+
+  // Départ (lame ou bouclier de Doran…) : surtout selon l'adversaire direct.
+  const sameStart = (a: string[], b: string[] | undefined): boolean =>
+    !!b &&
+    a.length === b.length &&
+    [...a].map(norm).sort().join() === [...b].map(norm).sort().join()
+  const start = pick<StartChoice>(
+    choices?.start,
+    (c) => sameStart(c.items, build.start),
+    weights,
+    prior,
+    kOf(priors.start),
+    oppExtra,
+    tuning
+  )
+  if (start) {
+    next.start = start.choice.items
+    notes.push({
+      kind: 'start',
+      label: start.choice.items.join(' + '),
+      reason: why(start, vsReason(start.choice))
+    })
+  }
+
+  // Moment des bottes : le plus courant pour ce champion, sauf si un autre gagne nettement plus ici.
+  const timings = choices?.bootsT
+  if (timings?.length) {
+    const usual = build.bootsTiming ?? [...timings].sort((a, b) => b.share - a.share)[0].value
+    next.bootsTiming = usual
+    const timing = pick<BootsTimingChoice>(
+      timings,
+      (c) => c.value === usual,
+      weights,
+      prior,
+      kOf(priors.bootsT),
+      oppExtra,
+      tuning
+    )
+    if (timing) {
+      next.bootsTiming = timing.choice.value
+      notes.push({
+        kind: 'bootsT',
+        label: bootsTimingLabel(timing.choice.value),
+        reason: why(timing, vsReason(timing.choice))
+      })
+    }
   }
   return { build: next, notes }
 }
