@@ -15,7 +15,15 @@ import { baseItemId, type GameData, type ItemInfo } from './gameData'
 import { norm } from './normalize'
 import type { ThreatProfile } from './threat'
 import { contextWeights, counterLift, stateWeights } from './variants'
-import { fmtPct, tr } from '../../../shared/i18n'
+import {
+  DEFAULT_NEXT_MODEL,
+  nextContexts,
+  nextEstimate,
+  nextScore,
+  type NextEstimate,
+  type NextModel
+} from './nextItems'
+import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
 
 export type StepKind = 'starter' | 'core' | 'boots' | 'antiheal' | 'situational' | 'owned'
 
@@ -163,15 +171,28 @@ function dataScore(
 /** Ajustement personnel d'un objet, appris de vos propres parties (voir engine/learning.ts). */
 export type PersonalItemBonus = (itemName: string) => { bonus: number; reason?: string } | null
 
-function scoreItem(
+/** Parts du score d'un objet qui ne dépendent pas des données de la méta. */
+interface ScoreParts {
+  /** Règles : base + besoins de la partie (dégâts adverses, soins, contrôles, avance…). */
+  rule: number
+  ruleReason?: string
+  /** Malus d'un objet anti-soins face à une équipe qui soigne peu. */
+  healPenalty: number
+  /** Face à ces adversaires précis et à leurs objets (déjà borné). */
+  counter: number
+  counterReason?: string
+  personal: number
+  personalReason?: string
+  defensive: boolean
+}
+
+function scoreParts(
   item: ItemInfo,
   threat: ThreatProfile,
-  optionIndex: number,
-  situational?: JunglerBuild['situational'],
   personal?: PersonalItemBonus,
   counters?: ItemCounters,
   counterWeight = 1
-): Scored {
+): ScoreParts {
   const rule =
     ITEM_RULES[item.name] ??
     Object.entries(ITEM_RULES).find(([k]) => norm(k) === norm(item.name))?.[1]
@@ -193,6 +214,57 @@ function scoreItem(
       }
     }
   }
+  let ruleReason: string | undefined
+  if (bestMetric && bestContribution >= 0.3) {
+    ruleReason = metricLabel(bestMetric)
+    if ((bestMetric === 'fedAp' || bestMetric === 'fedAd') && (threat.fed ?? threat.focus))
+      ruleReason = `vs ${(threat.fed ?? threat.focus)!.champ.label}`
+  }
+  // Face à ces adversaires précis et à leurs objets (mesuré en Master+, tous junglers confondus).
+  // counterWeight : coefficient réglé par le pipeline de méta (1 sans réglage).
+  const c = counterLift(item.name, threat, counters)
+  // Raison affichée seulement si l'effet repose sur assez de parties (sinon il compte, sans plus).
+  // (écarts déjà lissés par la collecte : 0,6 point est un effet établi.)
+  const counterReason =
+    c.best && c.lift >= 0.006 && c.best.lift >= 0.006 && c.best.games >= 100
+      ? `vs ${c.best.foe} (+${fmtPct(c.best.lift, 1)})`
+      : undefined
+  // Vos résultats avec cet objet (bonus ou malus limité : les règles et la méta restent la base).
+  const mine = personal?.(item.name)
+  return {
+    rule: score,
+    ruleReason,
+    // Un objet anti-soins n'a de sens que si l'adversaire soigne vraiment.
+    healPenalty: rule?.w.heal && rule.w.heal >= 1 && m.heal < 0.45 ? -1 : 0,
+    counter: Math.max(-0.6, Math.min(0.6, 6 * counterWeight * c.lift)),
+    counterReason,
+    personal: mine?.bonus ?? 0,
+    personalReason: mine?.reason,
+    defensive: rule?.role === 'defense' || rule?.role === 'utility'
+  }
+}
+
+/** Raison finale : règle, puis donnée de la méta, puis adversaire précis, puis vos parties. */
+function reasonOf(p: ScoreParts, learned?: string): string | undefined {
+  let reason = p.ruleReason
+  if (learned && !(reason && reason.startsWith('vs '))) reason = learned
+  if (p.counterReason) reason = p.counterReason
+  if (p.personalReason && !(reason && reason.startsWith('vs '))) reason = p.personalReason
+  return reason
+}
+
+function scoreItem(
+  item: ItemInfo,
+  threat: ThreatProfile,
+  optionIndex: number,
+  situational?: JunglerBuild['situational'],
+  personal?: PersonalItemBonus,
+  counters?: ItemCounters,
+  counterWeight = 1
+): Scored {
+  const p = scoreParts(item, threat, personal, counters, counterWeight)
+  const m = threat.metrics
+  let score = p.rule
   const learned = dataScore(item, situational, threat)
   const optionBonus = optionIndex >= 0 ? Math.max(0.1, 0.45 - optionIndex * 0.07) : 0
   if (learned) {
@@ -204,36 +276,38 @@ function scoreItem(
   } else {
     score += optionBonus
   }
-  // Un objet anti-soins n'a de sens que si l'adversaire soigne vraiment.
-  if (rule?.w.heal && rule.w.heal >= 1 && m.heal < 0.45) score -= 1
-  // Face à ces adversaires précis et à leurs objets (mesuré en Master+, tous junglers confondus).
-  const counter = counterLift(item.name, threat, counters)
-  // counterWeight : coefficient réglé par le pipeline de méta (1 sans réglage).
-  score += Math.max(-0.6, Math.min(0.6, 6 * counterWeight * counter.lift))
+  score += p.healPenalty + p.counter + p.personal
+  return { item, score, reason: reasonOf(p, learned?.reason), defensive: p.defensive }
+}
 
-  let reason: string | undefined
-  if (bestMetric && bestContribution >= 0.3) {
-    reason = metricLabel(bestMetric)
-    if ((bestMetric === 'fedAp' || bestMetric === 'fedAd') && (threat.fed ?? threat.focus))
-      reason = `vs ${(threat.fed ?? threat.focus)!.champ.label}`
+/** Mesures de l'objet suivant utilisables (assez de parties de ce champion à ce stade). */
+const NEXT_MIN_GAMES = 100
+/** Écart de score (en victoires) → points du plan : 4 points d'écart ≈ un besoin net des règles. */
+const NEXT_SCALE = 25
+const NEXT_CAP = 1.2
+
+/**
+ * Explication d'un choix fondé sur les mesures de l'objet suivant (écarts corrigés par la pente
+ * mesurée ; aucune explication tirée des données si elles ne se vérifient pas le lendemain).
+ */
+function nextReason(gd: GameData, e: NextEstimate, model: NextModel): string | undefined {
+  if (model.slope < 0.3) return undefined
+  const pt = (x: number): string => `+${fmtNumber(x * 100, 1)} ${tr('pt', 'pts')}`
+  if (e.best && e.best.value * model.slope >= 0.006) {
+    const label = gd.itemsByName.get(norm(e.best.item))?.label ?? e.best.item
+    return tr(`va avec ${label}`, `pairs with ${label}`)
   }
-  if (learned?.reason && !(reason && reason.startsWith('vs '))) reason = learned.reason
-  // Raison affichée seulement si l'effet repose sur assez de parties (sinon il compte, sans plus).
-  // (écarts déjà lissés par la collecte : 0,6 point est un effet établi.)
-  if (
-    counter.best &&
-    counter.lift >= 0.006 &&
-    counter.best.lift >= 0.006 &&
-    counter.best.games >= 100
-  )
-    reason = `vs ${counter.best.foe} (+${fmtPct(counter.best.lift, 1)})`
-  // Vos résultats avec cet objet (bonus ou malus limité : les règles et la méta restent la base).
-  const mine = personal?.(item.name)
-  if (mine) {
-    score += mine.bonus
-    if (mine.reason && !(reason && reason.startsWith('vs '))) reason = mine.reason
-  }
-  return { item, score, reason, defensive: rule?.role === 'defense' || rule?.role === 'utility' }
+  if (e.lift * model.slope >= 0.006)
+    return tr(
+      `${pt(e.lift * model.slope)} de victoires à or égal`,
+      `${pt(e.lift * model.slope)} win rate at equal gold`
+    )
+  if (e.share >= 0.3)
+    return tr(
+      `pris par ${fmtPct(e.share)} des joueurs après ces objets`,
+      `${fmtPct(e.share)} of players take it after these items`
+    )
+  return undefined
 }
 
 function chooseBoots(
@@ -359,7 +433,8 @@ export function buildItemPlan(
   currentGold: number,
   personal?: PersonalItemBonus,
   counters?: ItemCounters,
-  counterWeight = 1
+  counterWeight = 1,
+  nextModel: NextModel = DEFAULT_NEXT_MODEL
 ): ItemPlan {
   const unresolved: string[] = []
   const resolve = (name: string): ItemInfo | undefined => {
@@ -414,6 +489,21 @@ export function buildItemPlan(
     else if (!it && build.options.includes(name)) unresolved.push(name)
   }
   for (const c of core) pool.delete(c.id)
+  // Objet suivant mesuré pour ce champion : les objets réellement achetés du 4e au 6e rang.
+  const nextStats = build.next && build.next.n >= NEXT_MIN_GAMES ? build.next : undefined
+  const nextKey = new Map<string, string>()
+  if (nextStats) {
+    for (const k of [
+      ...Object.keys(nextStats.base),
+      ...Object.keys(nextStats.after),
+      ...Object.values(nextStats.after).flatMap((g) => Object.keys(g.i))
+    ])
+      nextKey.set(norm(k), k)
+    for (const k of Object.keys(nextStats.base)) {
+      const it = gd.itemsByName.get(norm(k))
+      if (it && it.isLegendary && !core.some((c) => c.id === it.id)) pool.set(it.id, it)
+    }
+  }
 
   // Composants importants déjà achetés : on privilégie les objets qui les terminent (l'or investi
   // n'est pas perdu et le plan ne change pas de direction en cours de partie).
@@ -478,6 +568,8 @@ export function buildItemPlan(
       }
       scored.splice(scored.indexOf(urgent), 1)
       scored.unshift({ item: third, score: 1, defensive: false })
+      pool.delete(urgent.item.id)
+      pool.set(third.id, third)
     }
   }
 
@@ -518,13 +610,84 @@ export function buildItemPlan(
     steps.filter((s) => s.item.isLegendary).map((s) => s.item)
   const situational: BuildStep[] = []
   const alternatives: BuildStep[] = []
-  for (const s of scored) {
-    const taken = [...legendaryInPlan(), ...situational.map((x) => x.item)]
-    if (taken.some((t) => conflicts(t, s.item))) continue
-    if (ownedLegendaries.some((o) => conflicts(o, s.item) && o.id !== s.item.id)) continue
-    const step: BuildStep = { item: s.item, kind: 'situational', owned: false, reason: s.reason }
-    if (taken.length < MAX_LEGENDARIES) situational.push(step)
-    else if (alternatives.length < 4) alternatives.push(step)
+  if (nextStats) {
+    // Objet par objet : le suivant est celui qui gagne le plus, à or égal, après les objets déjà
+    // prévus ou possédés (mesuré chaque nuit, et vérifié sur les parties du lendemain), corrigé
+    // par les besoins de la partie (règles, adversaires précis, tes parties).
+    const contexts = nextContexts(threat)
+    const emergency = Math.max(m.fedAp, m.fedAd, m.behind)
+    const ruleWeight = 0.25 + 0.75 * emergency
+    const parts = new Map<number, ScoreParts>()
+    const partsOf = (it: ItemInfo): ScoreParts => {
+      let p = parts.get(it.id)
+      if (!p) parts.set(it.id, (p = scoreParts(it, threat, personal, counters, counterWeight)))
+      return p
+    }
+    const keyOf = (it: ItemInfo): string => nextKey.get(norm(it.name)) ?? it.name
+    const offPlan = ownedLegendaries.filter((o) => !legendaryInPlan().some((t) => t.id === o.id))
+    const rank = (taken: ItemInfo[]): Scored[] => {
+      const have = [...new Set([...offPlan, ...taken].map(keyOf))]
+      const avail = [...pool.values()].filter(
+        (c) =>
+          !ownsId(c.id) &&
+          !taken.some((t) => conflicts(t, c)) &&
+          !ownedLegendaries.some((o) => conflicts(o, c))
+      )
+      const est = new Map<number, NextEstimate>()
+      for (const c of avail) {
+        const e = nextEstimate(nextStats, keyOf(c), have, contexts)
+        if (e) est.set(c.id, e)
+      }
+      const usable = avail.filter((c) => !est.get(c.id)?.excluded)
+      const values = usable
+        .filter((c) => est.has(c.id))
+        .map((c) => nextScore(est.get(c.id)!, nextModel))
+      const mean = values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0
+      // Objet jamais acheté à ce stade par ce champion : derrière tous les objets mesurés.
+      const floor = values.length ? NEXT_SCALE * (Math.min(...values) - mean) - 0.2 : 0
+      return usable
+        .map((c) => {
+          const p = partsOf(c)
+          const e = est.get(c.id)
+          const part = e
+            ? Math.max(-NEXT_CAP, Math.min(NEXT_CAP, NEXT_SCALE * (nextScore(e, nextModel) - mean)))
+            : Math.max(-NEXT_CAP, floor)
+          const startedComp = startedComponents.find((x) => buildsFrom(gd, c, x.id))
+          const score =
+            ruleWeight * p.rule +
+            part +
+            p.healPenalty +
+            p.counter +
+            p.personal +
+            (startedComp ? 0.5 : 0)
+          const reason = startedComp
+            ? `${tr('termine', 'completes')} ${startedComp.label}`
+            : reasonOf(p, e ? nextReason(gd, e, nextModel) : undefined)
+          return { item: c, score, reason, defensive: p.defensive }
+        })
+        .sort((a, b) => b.score - a.score)
+    }
+    for (;;) {
+      const taken = [...legendaryInPlan(), ...situational.map((x) => x.item)]
+      if (taken.length >= MAX_LEGENDARIES) break
+      const best = rank(taken)[0]
+      if (!best) break
+      situational.push({ item: best.item, kind: 'situational', owned: false, reason: best.reason })
+    }
+    // Autres bons choix : ceux qui suivraient le mieux le build prévu.
+    const planned = [...legendaryInPlan(), ...situational.map((x) => x.item)]
+    for (const s of rank(situational.length ? planned.slice(0, -1) : planned))
+      if (alternatives.length < 4 && !planned.some((t) => conflicts(t, s.item)))
+        alternatives.push({ item: s.item, kind: 'situational', owned: false, reason: s.reason })
+  } else {
+    for (const s of scored) {
+      const taken = [...legendaryInPlan(), ...situational.map((x) => x.item)]
+      if (taken.some((t) => conflicts(t, s.item))) continue
+      if (ownedLegendaries.some((o) => conflicts(o, s.item) && o.id !== s.item.id)) continue
+      const step: BuildStep = { item: s.item, kind: 'situational', owned: false, reason: s.reason }
+      if (taken.length < MAX_LEGENDARIES) situational.push(step)
+      else if (alternatives.length < 4) alternatives.push(step)
+    }
   }
 
   // Anti-soins : un seul objet complet, cohérent avec ce qui a déjà été acheté.

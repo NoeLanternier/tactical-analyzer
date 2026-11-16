@@ -16,6 +16,9 @@ import { fmtNumber, fmtPct, getLang, tr } from '../../../shared/i18n'
 import { computeLearning, type Learning } from '../engine/learning'
 import { gameTypeName, type GameType } from '../../../shared/modes'
 import { Card, Chip, ItemIcon, Meter } from './ui'
+import { NextProof } from './NextProof'
+import type { NextBacktest } from '../engine/catalog'
+import type { NextModel } from '../engine/nextItems'
 import { isMode, roleLabel } from '../engine/role'
 import { augmentName } from '../engine/augments'
 import {
@@ -493,10 +496,15 @@ function CompareRow({
 /** Est-ce que suivre l'app te fait gagner plus ? */
 function SelfCheckCard({
   reports,
-  type
+  type,
+  next,
+  model
 }: {
   reports: GameReport[]
   type: GameType | null
+  /** Vérification de l'objet suivant sur les parties collectées (méta du moment). */
+  next?: NextBacktest
+  model?: NextModel
 }): ReactElement {
   const check = useMemo(() => computeSelfCheck(reports, readDraftLog()), [reports])
   const name = type ? gameTypeName(type, getLang()) : ''
@@ -548,6 +556,7 @@ function SelfCheckCard({
             )}
           </div>
         )}
+        <NextProof bt={next} model={model} compact />
       </div>
     </Card>
   )
@@ -769,7 +778,12 @@ export function ReviewTab({ t }: { t: TactiqueState }): ReactElement | null {
             ))}
           </div>
           {current && <ReportView r={current} version={gd.version} />}
-          <SelfCheckCard reports={shown} type={type} />
+          <SelfCheckCard
+            reports={shown}
+            type={type}
+            next={t.catalog.backtest?.next}
+            model={t.catalog.nextModel}
+          />
           <ProgressCard l={learning} type={type} />
         </>
       )}

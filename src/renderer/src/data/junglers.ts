@@ -69,6 +69,22 @@ export interface JunglerBuild {
   choices?: BuildChoices
   /** ARAM Mayhem : augments choisis avec ce champion (méta du mode), du meilleur au moins bon. */
   augments?: AugmentStat[]
+  /** Objet suivant (4e au 6e objet), mesuré à avance égale (méta distante, voir engine/nextItems). */
+  next?: NextStats
+}
+
+/**
+ * Objet suivant : chaque achat du 4e au 6e objet comparé aux autres décisions prises au même
+ * moment (victoires en plus par rapport à l'attente selon l'écart d'or). Noms d'objets anglais.
+ * - base : objet → [achats, écart lissé, part des achats] ;
+ * - after : objet possédé → { t : achats après lui, i : objet → [achats, interaction, part] } ;
+ * - ctx : contexte (ap, ad, heal, tank, cc, ahead, behind) → objet → [achats, interaction].
+ */
+export interface NextStats {
+  n: number
+  base: Record<string, [number, number, number]>
+  after: Record<string, { t: number; i: Record<string, [number, number, number]> }>
+  ctx: Record<string, Record<string, [number, number]>>
 }
 
 /** Augment choisi avec un champion : parties, taux de victoire, et écart estimé (lissé). */

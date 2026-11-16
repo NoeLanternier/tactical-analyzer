@@ -21,6 +21,7 @@ import { tr } from '../../../shared/i18n'
 import { parseTuning, type EngineTuning } from './tuning'
 import { parseFit, parsePriors, type Priors, type TeamFit } from './stats'
 import { MODES, isModeKey, type ModeKey } from '../../../shared/modes'
+import { parseNext, parseNextModel, type NextModel } from './nextItems'
 
 // Catalogue des builds : base tactique + mise à jour distante éventuelle + build générique pour
 // tout champion absent de la base (nouveau champion, pick original...).
@@ -154,6 +155,8 @@ export interface Catalog {
   tuning?: EngineTuning
   /** Backtest de la méta (parties jugées avec la méta de la veille). */
   backtest?: BacktestSummary
+  /** Objet suivant : poids de la popularité et calibration, réglés par le backtest. */
+  nextModel?: NextModel
   /** Niveau de jeu des statistiques des junglers et des repères (méta distante). */
   statsBracket?: 'master' | 'gold'
   /** Force de lissage de chaque famille de statistiques, mesurée par la collecte. */
@@ -199,6 +202,24 @@ export interface BacktestSummary {
   variant: { followed: BacktestCell; other: BacktestCell }
   /** Achats du 4e au 6e objet : parmi les objets conseillés (high) ou non (low), au même rang. */
   items: { high: BacktestCell; low: BacktestCell }
+  /** Objet suivant, jugé sur les parties du lendemain à avance égale (absent des métas anciennes). */
+  next?: NextBacktest
+}
+
+/** Gain mesuré : victoires en plus des achats conformes au conseil moins celles des autres. */
+export interface NextGain {
+  followed: number
+  other: number
+  gain: number
+  se: number
+}
+export interface NextBacktest {
+  decisions: number
+  gammas: (Partial<NextGain> & { gamma: number })[]
+  /** Victoires en plus observées par point d'écart prévu (1 : bien calibré). */
+  calibration: { slope: number; se: number } | null
+  /** Ancien conseil (objets les plus construits selon le contexte), jugé de la même façon. */
+  old: NextGain | null
 }
 
 export type ItemCounters = Record<string, Record<string, [number, number]>>
@@ -306,7 +327,8 @@ export function mergeOverride(
         situational: parseSituational(b.situational, legacy),
         variants: parseVariants(Array.isArray(b.variants) ? b.variants.map(withRunes) : b.variants),
         choices: parseChoices(b.choices),
-        augments: parseAugmentStats(b.augments)
+        augments: parseAugmentStats(b.augments),
+        next: parseNext(b.next)
       })
       accepted++
     } else rejected++
@@ -327,6 +349,7 @@ export function mergeOverride(
         : (parseItemCounters(raw?.itemCounters) ?? base.itemCounters),
       tuning: parseTuning(raw?.tuning) ?? base.tuning,
       backtest: parseBacktest(raw?.backtest) ?? base.backtest,
+      nextModel: parseNextModel(raw?.nextModel) ?? base.nextModel,
       priors: priors ?? base.priors,
       fit: parseFit(raw?.fit) ?? base.fit,
       features: parseFeatures(raw?.features) ?? base.features,
@@ -662,7 +685,34 @@ function parseBacktest(raw: any): BacktestSummary | undefined {
   const high = cell(raw.items?.high)
   const low = cell(raw.items?.low)
   if (!followed || !other || !high || !low) return undefined
-  return { games: raw.games, variant: { followed, other }, items: { high, low } }
+  return {
+    games: raw.games,
+    variant: { followed, other },
+    items: { high, low },
+    ...(parseNextBacktest(raw.next) ? { next: parseNextBacktest(raw.next) } : {})
+  }
+}
+
+function parseNextBacktest(raw: any): NextBacktest | undefined {
+  if (num(raw?.decisions) === null || !Array.isArray(raw.gammas)) return undefined
+  const gain = (g: any): NextGain | null =>
+    num(g?.followed) !== null &&
+    num(g?.other) !== null &&
+    num(g?.gain) !== null &&
+    num(g?.se) !== null
+      ? { followed: g.followed, other: g.other, gain: g.gain, se: g.se }
+      : null
+  return {
+    decisions: raw.decisions,
+    gammas: raw.gammas
+      .filter((g: any) => num(g?.gamma) !== null)
+      .map((g: any) => ({ gamma: g.gamma, ...(gain(g) ?? {}) })),
+    calibration:
+      num(raw.calibration?.slope) !== null && num(raw.calibration?.se) !== null
+        ? { slope: raw.calibration.slope, se: raw.calibration.se }
+        : null,
+    old: gain(raw.old)
+  }
 }
 
 function parseItemCounters(raw: any): ItemCounters | undefined {

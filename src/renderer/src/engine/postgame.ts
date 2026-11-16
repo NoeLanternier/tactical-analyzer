@@ -1422,7 +1422,8 @@ export function analyzeGame(gd: GameData, catalog: Catalog, stored: GameFacts): 
       gold,
       undefined,
       catalog.itemCounters,
-      tw(catalog.tuning, 'counter')
+      tw(catalog.tuning, 'counter'),
+      catalog.nextModel
     )
   }
   if (!hasItems && build && champ && legendaries.length > 0) {

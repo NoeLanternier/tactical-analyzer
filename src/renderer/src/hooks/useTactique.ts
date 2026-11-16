@@ -780,11 +780,23 @@ export function useTactique(): TactiqueState {
             currentGold,
             personal,
             catalog.itemCounters,
-            tw(catalog.tuning, 'counter')
+            tw(catalog.tuning, 'counter'),
+            catalog.nextModel
           )
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- lang : les textes calculés suivent la langue
-    [gd, build, threat, me, currentGold, personal, catalog.itemCounters, catalog.tuning, lang]
+    [
+      gd,
+      build,
+      threat,
+      me,
+      currentGold,
+      personal,
+      catalog.itemCounters,
+      catalog.tuning,
+      catalog.nextModel,
+      lang
+    ]
   )
 
   const bench =

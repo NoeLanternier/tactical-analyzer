@@ -6,6 +6,7 @@ import { Card, Toggle } from './ui'
 import { TUNING_KEYS, type TuningKey } from '../engine/tuning'
 import { ROLES, roleLabel } from '../engine/role'
 import { RIOT_COMPLIANT } from '../../../shared/edition'
+import { NextProof } from './NextProof'
 
 const TUNING_LABEL: Record<TuningKey, [string, string]> = {
   pick: ['Force du champion', 'Champion strength'],
@@ -55,6 +56,7 @@ function EngineCard({ t }: { t: TactiqueState }): ReactElement | null {
           </p>
         </div>
       )}
+      {bt && <NextProof bt={bt.next} model={t.catalog.nextModel} />}
       {priors && (
         <div className="mb-2 text-[10px] leading-snug text-slate-400">
           <p className="mb-1 text-slate-500">

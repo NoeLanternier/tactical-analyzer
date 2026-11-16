@@ -12,7 +12,9 @@ ARAM, ARAM: Mayhem and rotating modes (URF, ARURF, One for All…).
   builds (same map, same items) without a rune page.
 - **Runes and items**: a rune page and an item order adapted to the enemy team, sent to the client as
   the app's own rune page and item set. During the game, the suggested build keeps adapting to the
-  enemy items and to your inventory (build suggestions only).
+  enemy items and to your inventory (build suggestions only). Items 4 to 6 are chosen one at a time from
+  the items you already have and the game state (measured at equal gold on collected games), and this
+  advice is checked every night against the next day's games (result shown in Settings).
 - **Post-game review**: farm, gold and level against your direct opponent, build compared with the
   suggestion at each purchase, deaths, objectives and vision, against benchmarks of your role and rank
   (in ARAM and the other modes: damage and gold per minute, damage share, deaths and build, against
