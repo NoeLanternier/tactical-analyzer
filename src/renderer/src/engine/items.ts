@@ -23,7 +23,7 @@ import {
   type NextEstimate,
   type NextModel
 } from './nextItems'
-import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
+import { fmtNumber, fmtPct, gold, tr } from '../../../shared/i18n'
 
 export type StepKind = 'starter' | 'core' | 'boots' | 'antiheal' | 'situational' | 'owned'
 
@@ -45,6 +45,11 @@ export interface NextBuy {
   component: ItemInfo | null
   /** Inventaire plein : objet à vendre pour faire de la place. */
   sellHint?: string
+  /**
+   * Build terminé : échange conseillé (vendre `sell`, puis acheter l'objet), quand la partie a
+   * changé au point qu'un autre objet vaut nettement plus que celui-ci, revente comprise.
+   */
+  swap?: { sell: ItemInfo; refund: number; reason?: string }
 }
 
 /** 6 emplacements : bottes + 5 objets légendaires (le familier se vend en fin de partie). */
@@ -289,6 +294,15 @@ const NEXT_SCALE = 25
 const NEXT_CAP = 1.2
 /** Écart de score pour remplacer le 3e objet du cœur (≈ 2 points de victoire mesurés). */
 const NEXT_SWAP = 0.5
+/** Un objet se revend 70 % de son prix. */
+const SELL_RATIO = 0.7
+/**
+ * Écart de score pour conseiller un échange en fin de build : bien plus que pour un achat, la
+ * revente coûtant 30 % de l'objet (un anti-soins face à une équipe qui ne soigne pas, par exemple).
+ */
+const SWAP_MIN = 0.8
+/** Objets à charges : la revente perd leur progression, ils ne sont jamais proposés à la vente. */
+const KEEP_ON_SELL = new Set(["Mejai's Soulstealer", 'Heartsteel', 'Hubris'].map(norm))
 
 /**
  * Explication d'un choix fondé sur les mesures de l'objet suivant (écarts corrigés par la pente
@@ -553,14 +567,20 @@ export function buildItemPlan(
     return p
   }
   const keyOf = (it: ItemInfo): string => nextKey.get(norm(it.name)) ?? it.name
-  const rankNext = (taken: ItemInfo[], extra: ItemInfo[] = []): Scored[] => {
-    const offPlan = ownedLegendaries.filter((o) => !taken.some((t) => t.id === o.id))
+  // `free` : objet possédé qu'on envisage de revendre (fin de build) : il redevient candidat.
+  const rankNext = (
+    taken: ItemInfo[],
+    extra: ItemInfo[] = [],
+    free: ItemInfo | null = null
+  ): Scored[] => {
+    const owned = free ? ownedLegendaries.filter((o) => o.id !== free.id) : ownedLegendaries
+    const offPlan = owned.filter((o) => !taken.some((t) => t.id === o.id))
     const have = [...new Set([...offPlan, ...taken].map(keyOf))]
     const avail = [...pool.values(), ...extra.filter((x) => !pool.has(x.id))].filter(
       (c) =>
-        !ownsId(c.id) &&
+        (!ownsId(c.id) || c.id === free?.id) &&
         !taken.some((t) => conflicts(t, c)) &&
-        !ownedLegendaries.some((o) => conflicts(o, c))
+        !owned.some((o) => conflicts(o, c))
     )
     const est = new Map<number, NextEstimate>()
     for (const c of avail) {
@@ -859,6 +879,61 @@ export function buildItemPlan(
   const ordered = [...steps.filter((s) => s.owned), ...steps.filter((s) => !s.owned)]
   steps.splice(0, steps.length, ...ordered)
 
+  // Échange en fin de build : pour chaque objet possédé (hors deux premiers objets du cœur, objets
+  // à charges et objets qui ont évolué), le meilleur objet qui pourrait le remplacer, classé comme
+  // un objet suivant après les autres objets possédés. Proposé seulement si l'écart couvre
+  // largement la perte de la revente (30 % du prix).
+  const swapOf = (): { sell: ItemInfo; buy: ItemInfo; reason?: string } | null => {
+    const keep = new Set(core.slice(0, 2).map((c) => c.id))
+    let best: { sell: ItemInfo; buy: Scored; gain: number } | null = null
+    for (const o of ownedLegendaries) {
+      if (keep.has(o.id) || evolved.has(o.id) || KEEP_ON_SELL.has(norm(o.name))) continue
+      const others = ownedLegendaries.filter((x) => x.id !== o.id)
+      const ranked = nextStats
+        ? rankNext(others, [o], o)
+        : [...pool.values(), ...(pool.has(o.id) ? [] : [o])]
+            .filter((c) => (c.id === o.id || !ownsId(c.id)) && !others.some((t) => conflicts(t, c)))
+            .map((c) =>
+              scoreItem(
+                c,
+                threat,
+                optionNames.indexOf(norm(c.name)),
+                build.situational,
+                personal,
+                counters,
+                counterWeight
+              )
+            )
+            .sort((a, b) => b.score - a.score)
+      const mine = ranked.find((x) => x.item.id === o.id)
+      const top = ranked.find((x) => x.item.id !== o.id)
+      if (!mine || !top) continue
+      const gain = top.score - mine.score
+      if (!best || gain > best.gain) best = { sell: o, buy: top, gain }
+    }
+    if (best && best.gain >= SWAP_MIN) {
+      // Pourquoi revendre : anti-soins face à une équipe qui soigne peu, sinon la raison de l'achat.
+      const useless = partsOf(best.sell).healPenalty < 0
+      return {
+        sell: best.sell,
+        buy: best.buy.item,
+        reason: useless
+          ? tr('peu de soins en face', 'little enemy healing')
+          : (best.buy.reason ?? tr('mieux adapté à la partie', 'better suited to this game'))
+      }
+    }
+    // Bottes : défensives face à un adversaire très en avance, si celles achetées ne protègent pas.
+    if (
+      ownedBoots &&
+      boots.item &&
+      boots.item.id !== ownedBoots.id &&
+      boots.reason &&
+      Math.max(m.fedAp, m.fedAd) >= 0.5
+    )
+      return { sell: ownedBoots, buy: boots.item, reason: boots.reason }
+    return null
+  }
+
   // Prochain achat.
   let next: NextBuy | null = null
   const pending = steps.find((s) => !s.owned)
@@ -898,15 +973,35 @@ export function buildItemPlan(
   } else if (pending) {
     next = { item: pending.item, remaining: pending.item.total, affordable: false, component: null }
   } else if (me && ownedLegendaries.length >= MAX_LEGENDARIES) {
-    // Build terminé : l'or restant sert à un élixir (dégâts ou survie selon le champion).
-    const elixir = gd.itemsByName.get(norm(ELIXIR[build.archetype]))
-    if (elixir && !ownsId(elixir.id))
+    // Build terminé : si la partie a changé au point qu'un objet ne sert plus (anti-soins face à
+    // une équipe qui ne soigne pas, objet offensif face à un adversaire très en avance…), échange
+    // conseillé, revente comprise ; sinon l'or restant sert à un élixir.
+    const swap = swapOf()
+    if (swap) {
+      const refund = Math.round(SELL_RATIO * swap.sell.total)
+      const remaining = Math.max(0, swap.buy.total - refund)
+      const shown = evolved.get(swap.sell.id) ?? swap.sell
       next = {
-        item: elixir,
-        remaining: elixir.total,
-        affordable: currentGold >= elixir.total,
-        component: null
+        item: swap.buy,
+        remaining,
+        affordable: currentGold >= remaining,
+        component: null,
+        swap: { sell: shown, refund, reason: swap.reason },
+        sellHint: tr(
+          `Remplace ${shown.label} : vends-le (+${gold(refund)}), puis achète ${swap.buy.label}`,
+          `Replace ${shown.label}: sell it (+${gold(refund)}), then buy ${swap.buy.label}`
+        )
       }
+    } else {
+      const elixir = gd.itemsByName.get(norm(ELIXIR[build.archetype]))
+      if (elixir && !ownsId(elixir.id))
+        next = {
+          item: elixir,
+          remaining: elixir.total,
+          affordable: currentGold >= elixir.total,
+          component: null
+        }
+    }
   }
 
   return { starter, steps, alternatives, next, unresolved: Array.from(new Set(unresolved)) }
@@ -917,6 +1012,8 @@ export interface PurchaseAlert {
   item: ItemInfo
   /** Objet complet visé quand l'alerte porte sur un composant. */
   target: ItemInfo | null
+  /** Build terminé : objet à revendre d'abord (échange conseillé). */
+  sell?: ItemInfo
 }
 
 /**
@@ -929,9 +1026,13 @@ export function purchaseAlert(
   gameTime: number
 ): PurchaseAlert | null {
   const next = plan?.next
-  if (!next || !me || next.sellHint) return null
+  if (!next || !me) return null
   const atBase = me.isDead || gameTime < 75
   if (!atBase) return null
+  // Échange en fin de build : vendre puis acheter, quand la revente suffit à le payer.
+  if (next.swap)
+    return next.affordable ? { item: next.item, target: null, sell: next.swap.sell } : null
+  if (next.sellHint) return null
   if (next.affordable) return { item: next.item, target: null }
   if (next.component && next.component.total >= 300)
     return { item: next.component, target: next.item }

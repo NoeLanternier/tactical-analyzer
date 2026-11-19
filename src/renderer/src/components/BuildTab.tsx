@@ -722,10 +722,14 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
         </p>
       )}
 
-      {/* Prochain achat (en partie) */}
+      {/* Prochain achat (en partie) ; build terminé : échange conseillé. */}
       {inGame && plan?.next && (
         <Card
-          title={tr('Prochain achat', 'Next buy')}
+          title={
+            plan.next.swap
+              ? tr('Correction du build', 'Build fix')
+              : tr('Prochain achat', 'Next buy')
+          }
           right={
             <span className="flex items-center gap-1 text-[11px] text-gold">
               <Coins size={12} /> {gold(Math.floor(t.currentGold))}
@@ -760,7 +764,17 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
           </div>
           {plan.next.sellHint && (
             <p className="mt-2 flex items-center gap-1.5 text-[11px] text-orange-300">
-              <TriangleAlert size={12} className="shrink-0" /> {plan.next.sellHint}
+              {plan.next.swap ? (
+                <ItemIcon item={plan.next.swap.sell} version={v} size={20} />
+              ) : (
+                <TriangleAlert size={12} className="shrink-0" />
+              )}{' '}
+              {plan.next.sellHint}
+            </p>
+          )}
+          {plan.next.swap?.reason && (
+            <p className="mt-1 text-[10px] text-slate-400">
+              {tr('Pourquoi', 'Why')} : {plan.next.swap.reason}
             </p>
           )}
         </Card>

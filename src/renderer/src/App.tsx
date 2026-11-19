@@ -126,7 +126,12 @@ export default function App(): ReactElement {
             />
             <div className="min-w-0 leading-tight">
               <div className="truncate text-[11px] font-semibold text-gold">
-                {tr('Achète', 'Buy')} {t.purchase.item.label}
+                {t.purchase.sell
+                  ? tr(
+                      `Vends ${t.purchase.sell.label}, achète ${t.purchase.item.label}`,
+                      `Sell ${t.purchase.sell.label}, buy ${t.purchase.item.label}`
+                    )
+                  : `${tr('Achète', 'Buy')} ${t.purchase.item.label}`}
               </div>
               {t.purchase.target && (
                 <div className="text-[10px] text-slate-400">
