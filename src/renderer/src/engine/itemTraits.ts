@@ -1,6 +1,7 @@
 // Caractéristiques des objets adverses qui changent la valeur des nôtres (mêmes règles que le
 // pipeline de méta, qui mesure leur effet sur la victoire) : anti-soins, dégâts en % des PV,
-// boucliers, protections contre les contrôles et le burst, pénétration, résistances, vol de vie.
+// boucliers, protections contre les contrôles et le burst, pénétration, résistances, vol de vie,
+// critiques.
 
 export type FoeTrait =
   | 'antiheal'
@@ -12,6 +13,7 @@ export type FoeTrait =
   | 'armor'
   | 'mr'
   | 'lifesteal'
+  | 'crit'
 
 /** Nombre d'objets adverses à partir duquel la caractéristique compte (comme le pipeline). */
 export const FOE_TRAIT_MIN: Record<FoeTrait, number> = {
@@ -23,7 +25,8 @@ export const FOE_TRAIT_MIN: Record<FoeTrait, number> = {
   magicPen: 2,
   armor: 3,
   mr: 3,
-  lifesteal: 2
+  lifesteal: 2,
+  crit: 3
 }
 
 export const FOE_TRAIT_LABEL: Record<FoeTrait, [string, string]> = {
@@ -35,7 +38,8 @@ export const FOE_TRAIT_LABEL: Record<FoeTrait, [string, string]> = {
   magicPen: ['pénétration magique adverse', 'enemy magic penetration'],
   armor: ['armure adverse', 'enemy armor'],
   mr: ['RM adverse', 'enemy MR'],
-  lifesteal: ['vol de vie adverse', 'enemy lifesteal']
+  lifesteal: ['vol de vie adverse', 'enemy lifesteal'],
+  crit: ['critiques adverses', 'enemy crits']
 }
 
 /** Caractéristiques d'un objet d'après sa description anglaise (Data Dragon) et ses stats. */
@@ -57,6 +61,7 @@ export function itemTraits(description: string, stats: Record<string, number>): 
   if ((stats.FlatArmorMod ?? 0) >= 40) t.push('armor')
   if ((stats.FlatSpellBlockMod ?? 0) >= 40) t.push('mr')
   if ((stats.PercentLifeStealMod ?? 0) > 0 || /omnivamp|life ?steal/.test(desc)) t.push('lifesteal')
+  if ((stats.FlatCritChanceMod ?? 0) > 0) t.push('crit')
   return t
 }
 

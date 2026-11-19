@@ -787,6 +787,7 @@ function parseProfiles(raw: any): MeasuredProfiles | undefined {
         shield: p.shield,
         crit: p.crit,
         aa: p.aa,
+        ...(num(p.itemAp) !== null ? { itemAp: Math.max(0, Math.min(1, p.itemAp)) } : {}),
         games: p.games
       }
     }

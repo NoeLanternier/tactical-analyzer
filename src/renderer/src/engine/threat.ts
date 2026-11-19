@@ -15,6 +15,8 @@ export interface MeasuredProfile {
   shield: number
   crit: number
   aa: number
+  /** Part magique habituelle des statistiques offensives de ses objets (absente : métas anciennes). */
+  itemAp?: number
   games: number
 }
 
@@ -31,6 +33,8 @@ export interface ChampProfile {
   aa: number
   /** Profil issu des parties réelles (true) ou de la table manuelle / des tags Riot (false). */
   measured: boolean
+  /** Part magique habituelle de ses objets (mesurée), pour repérer un build inhabituel en partie. */
+  itemAp: number | null
 }
 
 export type MeasuredProfiles = Record<string, MeasuredProfile>
@@ -77,7 +81,8 @@ export function profileOf(champ: ChampInfo, measured?: MeasuredProfiles): ChampP
       burst,
       crit: clamp01(m.crit),
       aa: clamp01(Math.max(m.aa, f('M') ? 0.6 : 0)),
-      measured: true
+      measured: true,
+      itemAp: typeof m.itemAp === 'number' ? clamp01(m.itemAp) : null
     }
   }
   return {
@@ -90,7 +95,8 @@ export function profileOf(champ: ChampInfo, measured?: MeasuredProfiles): ChampP
     burst,
     crit: f('K') ? 0.7 : 0,
     aa: f('M') ? 1 : f('O') ? 0.7 : 0,
-    measured: false
+    measured: false,
+    itemAp: null
   }
 }
 
@@ -180,7 +186,7 @@ export function defenseNeeds(
 }
 
 /** Statistiques offensives/défensives tirées des objets d'un joueur en partie. */
-interface ItemStats {
+export interface ItemStats {
   ap: number
   ad: number
   crit: number
@@ -215,6 +221,88 @@ function itemStats(gd: GameData, p: LivePlayer): ItemStats {
   return { ap, ad, crit, as, armor, mr, vamp }
 }
 
+/** Champions dont le passif multiplie les chances de critique (Yasuo, Yone : ×2). */
+const CRIT_KIT: Record<string, number> = { Yasuo: 2, Yone: 2 }
+
+/**
+ * Profil d'un adversaire en partie : ce que ses vrais objets disent remplace peu à peu son profil
+ * habituel (mesuré sur toutes les parties du champion). Rien n'est connu de son build au début ;
+ * vers 7 000 pièces d'or d'objets (deux à trois objets légendaires), seuls ses objets comptent pour
+ * les critiques et la vitesse d'attaque. Une Miss Fortune létalité ne compte donc plus comme une
+ * menace critique.
+ * - Critiques : 50 % de chances de critique (deux objets) = intensité maximale, comme le profil.
+ * - Dégâts magiques ou physiques : écart de ses objets à ceux qu'il construit d'habitude (un Varus
+ *   AP fait des dégâts magiques ; un Corki, dont les dégâts sont surtout magiques avec des objets
+ *   AD, reste magique). Sans mesure de ses objets habituels : mélange profil / objets.
+ * - Résistance et soins : la moitié vient du kit du champion, le reste de ses objets (armure, RM,
+ *   vol de vie, comptés à part).
+ */
+export function liveProfile(
+  champ: ChampInfo,
+  base: ChampProfile,
+  st: ItemStats,
+  itemGold: number
+): { prof: ChampProfile; apShare: number; known: number } {
+  const known = clamp01(itemGold / 7000)
+  const critChance = st.crit * (CRIT_KIT[champ.id] ?? 1)
+  const crit = (1 - known) * base.crit + known * clamp01(critChance / 0.5)
+  const aa = (1 - known) * base.aa + known * clamp01(st.as / 0.7)
+  const apVal = st.ap * 20
+  const adVal = st.ad * 35 + st.crit * 4000 + st.as * 2500
+  // Part de ses statistiques offensives connue : rien avant ses premiers objets offensifs.
+  const dmgKnown = clamp01((apVal + adVal) / 6000)
+  let apShare = base.ap
+  if (apVal + adVal > 0) {
+    const itemAp = apVal / (apVal + adVal)
+    apShare =
+      base.itemAp !== null
+        ? clamp01(base.ap + 0.8 * dmgKnown * (itemAp - base.itemAp))
+        : (1 - 0.75 * dmgKnown) * base.ap + 0.75 * dmgKnown * itemAp
+  }
+  return {
+    prof: {
+      ...base,
+      crit,
+      aa,
+      tank: (1 - 0.5 * known) * base.tank,
+      heal: (1 - 0.5 * known) * base.heal
+    },
+    apShare,
+    known
+  }
+}
+
+/** Note quand le build d'un adversaire s'écarte nettement de son build habituel. */
+function buildNote(
+  notes: string[],
+  champ: ChampInfo,
+  base: ChampProfile,
+  prof: ChampProfile,
+  apShare: number
+): void {
+  if (base.crit >= 0.6 && prof.crit <= 0.25)
+    notes.push(
+      tr(
+        `${champ.label} ne joue pas critique : les objets contre les critiques ne sont plus conseillés.`,
+        `${champ.label} is not building crit: anti-crit items are no longer suggested.`
+      )
+    )
+  if (apShare - base.ap >= 0.3)
+    notes.push(
+      tr(
+        `${champ.label} joue AP : ses dégâts sont surtout magiques.`,
+        `${champ.label} is building AP: mostly magic damage.`
+      )
+    )
+  else if (base.ap - apShare >= 0.3)
+    notes.push(
+      tr(
+        `${champ.label} joue AD : ses dégâts sont surtout physiques.`,
+        `${champ.label} is building AD: mostly physical damage.`
+      )
+    )
+}
+
 /**
  * Analyse la composition adverse. Sans données de partie : profils des champions.
  * Avec les données de partie : chaque adversaire est pondéré par son avance (or des objets,
@@ -242,7 +330,7 @@ export function analyzeThreat(
   }
 
   // Extra pour le score d'avance, en partie.
-  const extra = { crit: 0, aa: 0, heal: 0, armor: 0, mr: 0 }
+  const extra = { heal: 0, armor: 0, mr: 0 }
   const foeItemTraits: FoeTrait[][] = []
   const focusOf = livePlayers?.me && live ? deathFocus(live, livePlayers.me) : null
 
@@ -250,14 +338,11 @@ export function analyzeThreat(
     for (const p of livePlayers.foes) {
       const champ = champFromLive(gd, p.rawChampionName, p.championName)
       if (!champ) continue
-      const prof = profileOf(champ, measured)
+      const base = profileOf(champ, measured)
       const st = itemStats(gd, p)
       const itemGold = inventoryValue(gd, p.items)
-      // Correction AP/AD à partir des objets achetés (valeur en or approximative des stats).
-      const apVal = st.ap * 20
-      const adVal = st.ad * 35 + st.crit * 4000 + st.as * 2500
-      let apShare = prof.ap
-      if (apVal + adVal > 1200) apShare = 0.5 * prof.ap + 0.5 * (apVal / (apVal + adVal))
+      const { prof, apShare } = liveProfile(champ, base, st, itemGold)
+      buildNote(notes, champ, base, prof, apShare)
       const power = Math.max(
         0.3,
         1 + itemGold / 3500 + p.level * 0.04 + (p.scores.kills - 0.5 * p.scores.deaths) * 0.12
@@ -278,8 +363,6 @@ export function analyzeThreat(
         const info = gd.items.get(it.itemID)
         if (info?.isLegendary) foeItemTraits.push(info.traits)
       }
-      extra.crit += st.crit
-      extra.aa += st.as
       extra.heal += st.vamp
       extra.armor += st.armor
       extra.mr += st.mr
@@ -331,8 +414,9 @@ export function analyzeThreat(
     heal: clamp01(total('heal') / 2.5 + extra.heal * 2),
     shield: clamp01(total('shield') / 3),
     burst: clamp01(total('burst') / 2.5),
-    crit: clamp01(total('crit') / 2 + extra.crit / 1.0),
-    aa: clamp01(total('aa') / 2 + extra.aa / 1.5),
+    // (en partie, le profil de chaque adversaire suit déjà ses vrais objets : voir liveProfile.)
+    crit: clamp01(total('crit') / 2),
+    aa: clamp01(total('aa') / 2),
     fedAp: 0,
     fedAd: 0,
     ahead: 0,
