@@ -1,5 +1,5 @@
 import { CHAMPION_PROFILES } from '../data/champions'
-import { foeTraitsOf, type FoeTrait } from './itemTraits'
+import { foeTraitsOf, setupTraitsOf, type FoeTrait } from './itemTraits'
 import type { Metric } from '../data/items'
 import type { LiveGameData, LivePlayer } from '../../../shared/types'
 import { champFromLive, inventoryValue, type ChampInfo, type GameData } from './gameData'
@@ -625,7 +625,8 @@ export function analyzeThreat(
     live: livePlayers !== null,
     goldDiff,
     defense,
-    foeTraits: foeTraitsOf(foeItemTraits)
+    // Objets adverses du moment, et sorts d'invocateur / clés de voûte adverses.
+    foeTraits: [...foeTraitsOf(foeItemTraits), ...setupTraitsOf(livePlayers?.foes ?? [])]
   }
 }
 

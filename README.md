@@ -16,7 +16,8 @@ ARAM, ARAM: Mayhem and rotating modes (URF, ARURF, One for All…).
   the items you already have and the game state (measured at equal gold on collected games); the start,
   boots (and when to buy them), keystone and build family also account for your direct opponent and
   for your own team's damage profile. In game, each enemy's actual items progressively replace their usual
-  profile (a lethality Miss Fortune is not treated as a crit threat), and the same goes for your allies.
+  profile (a lethality Miss Fortune is not treated as a crit threat), and the same goes for your allies;
+  enemy summoner spells and keystones (shown by the Live Client Data API) count too.
   Summoner spells are suggested too, from your direct opponent's type (ranged or melee, AP or AD) and
   the game. Once the build is complete, the
   build panel can suggest replacing an item that no longer fits the game (sell value and missing gold

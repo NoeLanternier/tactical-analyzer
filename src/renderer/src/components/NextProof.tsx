@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import type { NextBacktest, NextGain } from '../engine/catalog'
+import type { NextBacktest, NextGain, SwapBacktest } from '../engine/catalog'
 import type { NextModel } from '../engine/nextItems'
 import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
 
@@ -29,10 +29,13 @@ function usedGain(bt: NextBacktest, model?: NextModel): NextGain | null {
 export function NextProof({
   bt,
   model,
+  swap,
   compact = false
 }: {
   bt?: NextBacktest
   model?: NextModel
+  /** Échanges en fin de build conseillés, jugés de la même façon. */
+  swap?: SwapBacktest
   compact?: boolean
 }): ReactElement | null {
   const g = bt ? usedGain(bt, model) : null
@@ -86,6 +89,19 @@ export function NextProof({
           {tr(
             `Écarts prévus retrouvés à ${fmtPct(Math.max(0, bt.calibration.slope))} (100 % : prévisions exactes)`,
             `Predicted gaps found at ${fmtPct(Math.max(0, bt.calibration.slope))} (100%: exact predictions)`
+          )}
+        </p>
+      )}
+      {swap?.gain && (
+        <p>
+          {tr(
+            `Échanges de fin de build conseillés (${fmtNumber(swap.followed + swap.kept)} parties) : échange fait `,
+            `Suggested end-of-build swaps (${fmtNumber(swap.followed + swap.kept)} games): swap made `
+          )}
+          <b className={tone(swap.gain)}>{pts(swap.gain.gain)}</b>
+          {tr(
+            ` par rapport à rien changer (± ${fmtNumber(2 * swap.gain.se * 100, 1)})`,
+            ` vs no change (± ${fmtNumber(2 * swap.gain.se * 100, 1)})`
           )}
         </p>
       )}

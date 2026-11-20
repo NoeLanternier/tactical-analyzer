@@ -82,7 +82,17 @@ function normalize(raw: any): LiveGameData | null {
       assists: Number(p.scores?.assists ?? 0),
       creepScore: Number(p.scores?.creepScore ?? 0),
       wardScore: Number(p.scores?.wardScore ?? 0)
-    }
+    },
+    // Sorts d'invocateur et clé de voûte (visibles par tous les joueurs dans la partie).
+    spells: [p.summonerSpells?.summonerSpellOne, p.summonerSpells?.summonerSpellTwo]
+      .map(
+        (s: any) =>
+          /SummonerSpell_(Summoner[A-Za-z0-9]+)_DisplayName/.exec(
+            String(s?.rawDisplayName ?? '')
+          )?.[1] ?? ''
+      )
+      .filter(Boolean),
+    ...(Number(p.runes?.keystone?.id) > 0 ? { keystone: Number(p.runes.keystone.id) } : {})
   }))
   const events: any[] = Array.isArray(raw.events?.Events) ? raw.events.Events : []
   const kills = events

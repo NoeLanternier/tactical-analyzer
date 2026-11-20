@@ -14,9 +14,21 @@ export type FoeTrait =
   | 'mr'
   | 'lifesteal'
   | 'crit'
+  // Sorts d'invocateur et clés de voûte adverses (voir setupTraitsOf).
+  | 'cleanse'
+  | 'exhaust'
+  | 'ignite'
+  | 'ksHeal'
+  | 'ksAs'
+  | 'ksBurst'
+  | 'ksTank'
+
+/** Caractéristiques tirées des objets (les autres viennent des sorts et des clés de voûte). */
+type ItemTrait = Exclude<FoeTrait, SetupTrait>
+type SetupTrait = 'cleanse' | 'exhaust' | 'ignite' | 'ksHeal' | 'ksAs' | 'ksBurst' | 'ksTank'
 
 /** Nombre d'objets adverses à partir duquel la caractéristique compte (comme le pipeline). */
-export const FOE_TRAIT_MIN: Record<FoeTrait, number> = {
+export const FOE_TRAIT_MIN: Record<ItemTrait, number> = {
   antiheal: 1,
   pctHp: 2,
   shield: 2,
@@ -39,13 +51,64 @@ export const FOE_TRAIT_LABEL: Record<FoeTrait, [string, string]> = {
   armor: ['armure adverse', 'enemy armor'],
   mr: ['RM adverse', 'enemy MR'],
   lifesteal: ['vol de vie adverse', 'enemy lifesteal'],
-  crit: ['critiques adverses', 'enemy crits']
+  crit: ['critiques adverses', 'enemy crits'],
+  cleanse: ['Purge adverse', 'enemy Cleanse'],
+  exhaust: ['Fatigue adverse', 'enemy Exhaust'],
+  ignite: ['Embrasement adverse', 'enemy Ignite'],
+  ksHeal: ['clés de voûte de soins adverses', 'enemy sustain keystones'],
+  ksAs: ['clés de voûte de vitesse d’attaque adverses', 'enemy attack speed keystones'],
+  ksBurst: ['clés de voûte de burst adverses', 'enemy burst keystones'],
+  ksTank: ['clés de voûte de résistance adverses', 'enemy tank keystones']
+}
+
+/** Sorts adverses mesurés (clé Data Dragon → caractéristique), comme la collecte. */
+const SETUP_SPELLS: Record<string, SetupTrait> = {
+  SummonerBoost: 'cleanse',
+  SummonerExhaust: 'exhaust',
+  SummonerDot: 'ignite'
+}
+/** Clés de voûte adverses, par effet (mêmes groupes que la collecte). */
+const KEYSTONE_TRAITS: Record<number, SetupTrait[]> = {
+  8010: ['ksHeal'],
+  8021: ['ksHeal'],
+  8437: ['ksHeal', 'ksTank'],
+  8008: ['ksAs'],
+  9923: ['ksAs'],
+  8005: ['ksAs'],
+  8112: ['ksBurst'],
+  8128: ['ksBurst'],
+  8229: ['ksBurst'],
+  8369: ['ksBurst'],
+  8439: ['ksTank'],
+  8465: ['ksTank']
+}
+/** Nombre d'adversaires à partir duquel le sort ou la clé de voûte compte. */
+const SETUP_MIN: Record<SetupTrait, number> = {
+  cleanse: 1,
+  exhaust: 1,
+  ignite: 2,
+  ksHeal: 2,
+  ksAs: 1,
+  ksBurst: 2,
+  ksTank: 2
+}
+
+/** Sorts d'invocateur et clés de voûte adverses (API en jeu), mesurés comme les objets adverses. */
+export function setupTraitsOf(foes: { spells?: string[]; keystone?: number }[]): FoeTrait[] {
+  const count = new Map<SetupTrait, number>()
+  for (const f of foes) {
+    const seen = new Set<SetupTrait>()
+    for (const s of f.spells ?? []) if (SETUP_SPELLS[s]) seen.add(SETUP_SPELLS[s])
+    for (const t of KEYSTONE_TRAITS[f.keystone ?? 0] ?? []) seen.add(t)
+    for (const t of seen) count.set(t, (count.get(t) ?? 0) + 1)
+  }
+  return (Object.keys(SETUP_MIN) as SetupTrait[]).filter((t) => (count.get(t) ?? 0) >= SETUP_MIN[t])
 }
 
 /** Caractéristiques d'un objet d'après sa description anglaise (Data Dragon) et ses stats. */
 export function itemTraits(description: string, stats: Record<string, number>): FoeTrait[] {
   const desc = description.replace(/<[^>]+>/g, ' ').toLowerCase()
-  const t: FoeTrait[] = []
+  const t: ItemTrait[] = []
   const offensive =
     (stats.FlatPhysicalDamageMod ?? 0) > 0 ||
     (stats.FlatMagicDamageMod ?? 0) > 0 ||
@@ -69,7 +132,7 @@ export function itemTraits(description: string, stats: Record<string, number>): 
 export function foeTraitsOf(foeItemTraits: FoeTrait[][]): FoeTrait[] {
   const count = new Map<FoeTrait, number>()
   for (const traits of foeItemTraits) for (const t of traits) count.set(t, (count.get(t) ?? 0) + 1)
-  return (Object.keys(FOE_TRAIT_MIN) as FoeTrait[]).filter(
+  return (Object.keys(FOE_TRAIT_MIN) as ItemTrait[]).filter(
     (t) => (count.get(t) ?? 0) >= FOE_TRAIT_MIN[t]
   )
 }

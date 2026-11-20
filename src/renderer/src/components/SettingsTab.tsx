@@ -56,7 +56,7 @@ function EngineCard({ t }: { t: TactiqueState }): ReactElement | null {
           </p>
         </div>
       )}
-      {bt && <NextProof bt={bt.next} model={t.catalog.nextModel} />}
+      {bt && <NextProof bt={bt.next} model={t.catalog.nextModel} swap={bt.swap} />}
       {priors && (
         <div className="mb-2 text-[10px] leading-snug text-slate-400">
           <p className="mb-1 text-slate-500">

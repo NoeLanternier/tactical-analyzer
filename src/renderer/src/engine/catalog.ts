@@ -207,6 +207,19 @@ export interface BacktestSummary {
   items: { high: BacktestCell; low: BacktestCell }
   /** Objet suivant, jugé sur les parties du lendemain à avance égale (absent des métas anciennes). */
   next?: NextBacktest
+  /** Échanges en fin de build conseillés, jugés de la même façon. */
+  swap?: SwapBacktest
+}
+
+/**
+ * Échanges en fin de build : parties où un échange était conseillé au 5e objet ; échange conseillé
+ * fait, ou rien changé (victoires en plus de l'attente) ; gain = l'un moins l'autre.
+ */
+export interface SwapBacktest {
+  decisions: number
+  followed: number
+  kept: number
+  gain: NextGain | null
 }
 
 /** Gain mesuré : victoires en plus des achats conformes au conseil moins celles des autres. */
@@ -751,7 +764,25 @@ function parseBacktest(raw: any): BacktestSummary | undefined {
     games: raw.games,
     variant: { followed, other },
     items: { high, low },
-    ...(parseNextBacktest(raw.next) ? { next: parseNextBacktest(raw.next) } : {})
+    ...(parseNextBacktest(raw.next) ? { next: parseNextBacktest(raw.next) } : {}),
+    ...(parseSwap(raw.swap) ? { swap: parseSwap(raw.swap) } : {})
+  }
+}
+
+function parseSwap(raw: any): SwapBacktest | undefined {
+  if (num(raw?.decisions) === null) return undefined
+  const g = raw.gain
+  return {
+    decisions: raw.decisions,
+    followed: num(raw.suggested?.followed?.n) ?? 0,
+    kept: num(raw.suggested?.kept?.n) ?? 0,
+    gain:
+      num(g?.followed) !== null &&
+      num(g?.other) !== null &&
+      num(g?.gain) !== null &&
+      num(g?.se) !== null
+        ? { followed: g.followed, other: g.other, gain: g.gain, se: g.se }
+        : null
   }
 }
 

@@ -16,6 +16,7 @@ import {
   type ModeKey
 } from '../../../shared/modes'
 import { analyzeThreat } from './threat'
+import { SUMMONER_SPELLS } from '../data/spells'
 import { fmtNumber, fmtPct, getLang, gold, tr } from '../../../shared/i18n'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -62,6 +63,9 @@ export interface FactPlayer {
   taken?: number
   /** Augments choisis (ARAM Mayhem), dans l'ordre. */
   augments?: number[]
+  /** Sorts d'invocateur et clé de voûte (objets face aux sorts et runes adverses). */
+  spells?: number[]
+  keystone?: number
 }
 
 export type MonsterKind = 'dragon' | 'elder' | 'grubs' | 'herald' | 'baron' | 'atakhan'
@@ -272,6 +276,11 @@ export function normalizeGame(
       wards: num(s.wardsPlaced),
       controlWards: num(s.visionWardsBoughtInGame ?? s.detectorWardsPlaced),
       taken: num(s.totalDamageTaken),
+      spells: spells.filter((x) => x > 0),
+      ...(() => {
+        const ks = num(s.perk0) || num(p.perks?.styles?.[0]?.selections?.[0]?.perk)
+        return ks > 0 ? { keystone: ks } : {}
+      })(),
       ...(() => {
         const aug = [1, 2, 3, 4, 5, 6]
           .map((i) => num(s[`playerAugment${i}`] ?? p[`playerAugment${i}`]))
@@ -705,6 +714,8 @@ export function liveAt(
       level: frame?.[idx]?.[3] || 1,
       isDead: false,
       items,
+      spells: (p.spells ?? []).map((id) => SUMMONER_SPELLS[id]?.key ?? '').filter(Boolean),
+      ...(p.keystone ? { keystone: p.keystone } : {}),
       scores: {
         kills: s.k,
         deaths: s.d,

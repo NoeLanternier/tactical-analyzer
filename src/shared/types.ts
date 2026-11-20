@@ -146,6 +146,10 @@ export interface LivePlayer {
   isDead: boolean
   items: LiveItem[]
   scores: { kills: number; deaths: number; assists: number; creepScore: number; wardScore: number }
+  /** Sorts d'invocateur (clé Data Dragon : « SummonerFlash »…), si l'API en jeu les donne. */
+  spells?: string[]
+  /** Clé de voûte (identifiant de rune), si l'API en jeu la donne. */
+  keystone?: number
 }
 
 /** Élimination d'un champion (événements de l'API en jeu). Noms : Riot ID sans le tag. */
