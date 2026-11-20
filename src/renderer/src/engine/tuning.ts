@@ -44,7 +44,8 @@ export function parseTuning(data: unknown): EngineTuning | undefined {
   const weights = {} as Record<TuningKey, number>
   for (const k of TUNING_KEYS) {
     const v = given[k]
-    weights[k] = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(2, v)) : 1
+    // (borne de la collecte : 3, voir tactique-meta src/tuning.mjs)
+    weights[k] = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(3, v)) : 1
   }
   return { games, weights }
 }

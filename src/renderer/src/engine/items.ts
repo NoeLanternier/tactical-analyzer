@@ -292,8 +292,11 @@ const NEXT_MIN_GAMES = 100
 /** Écart de score (en victoires) → points du plan : 4 points d'écart ≈ un besoin net des règles. */
 const NEXT_SCALE = 25
 const NEXT_CAP = 1.2
-/** Écart de score pour remplacer le 3e objet du cœur (≈ 2 points de victoire mesurés). */
-const NEXT_SWAP = 0.5
+/**
+ * Écart de score pour remplacer le 3e objet du cœur (≈ 1,6 point de victoire mesuré). Abaissé de
+ * 0,5 à 0,4 le 20 novembre 2026, une fois l'objet suivant vérifié sur plus de 365 000 achats.
+ */
+const NEXT_SWAP = 0.4
 /** Un objet se revend 70 % de son prix. */
 const SELL_RATIO = 0.7
 /**
@@ -559,7 +562,9 @@ export function buildItemPlan(
   // et tes parties. `extra` : candidats en plus de la réserve (le 3e objet du cœur).
   const contexts = nextContexts(threat)
   const emergency = Math.max(m.fedAp, m.fedAd, m.behind)
-  const ruleWeight = 0.25 + 0.75 * emergency
+  // Poids des règles écrites à la main : faible en partie calme (les mesures, vérifiées chaque
+  // nuit, décident ; 0,25 avant le 20 novembre 2026), entier en cas d'urgence.
+  const ruleWeight = 0.15 + 0.85 * emergency
   const parts = new Map<number, ScoreParts>()
   const partsOf = (it: ItemInfo): ScoreParts => {
     let p = parts.get(it.id)
