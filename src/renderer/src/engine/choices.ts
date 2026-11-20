@@ -9,14 +9,16 @@ import type {
   RuneSpec,
   SituationContext,
   SkillChoice,
+  SpellChoice,
   StartChoice
 } from '../data/junglers'
+import { spellName } from '../data/spells'
 import type { Pet } from '../data/junglers'
 import type { Catalog, DuelPeriod } from './catalog'
 import type { ChampInfo } from './gameData'
 import { norm } from './normalize'
 import type { ThreatProfile } from './threat'
-import { CONTEXT_LABEL, contextWeights } from './variants'
+import { CONTEXT_LABEL, contextWeights, laneWeights } from './variants'
 import { tw, type EngineTuning } from './tuning'
 import { DEFAULT_PRIORS, shrunk as bayes, type Priors } from './stats'
 import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
@@ -29,7 +31,7 @@ import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
 // les données ne distinguent pas l'effet d'un contexte du hasard, le choix habituel est gardé.
 
 export interface ChoiceNote {
-  kind: 'runes' | 'boots' | 'pet' | 'skills' | 'start' | 'bootsT'
+  kind: 'runes' | 'boots' | 'pet' | 'skills' | 'start' | 'bootsT' | 'spells'
   /** Option retenue (nom affichable). */
   label: string
   reason: string
@@ -146,7 +148,8 @@ export function adaptChoices(
   champRate?: number
 ): AdaptedBuild {
   const choices = build.choices
-  const weights = contextWeights(threat)
+  // Composition des deux équipes, et type d'adversaire direct (distance ou mêlée, AP ou AD).
+  const weights = { ...contextWeights(threat), ...laneWeights(threat, enemyJungler) }
   const prior = champRate ?? build.winRate ?? 0.5
   const notes: ChoiceNote[] = []
   const next: JunglerBuild = { ...build }
@@ -292,6 +295,33 @@ export function adaptChoices(
         kind: 'bootsT',
         label: bootsTimingLabel(timing.choice.value),
         reason: why(timing, vsReason(timing.choice))
+      })
+    }
+  }
+
+  // Sorts d'invocateur : les plus joués par ce champion, sauf si d'autres gagnent nettement plus
+  // dans cette partie (adversaire de mêlée ou à distance, composition…).
+  const spells = choices?.spells
+  if (spells?.length) {
+    const same = (a: number[], b: number[]): boolean =>
+      [...a].sort((x, y) => x - y).join() === [...b].sort((x, y) => x - y).join()
+    const usual = build.spells ?? [...spells].sort((a, b) => b.share - a.share)[0].ids
+    next.spells = usual
+    const best = pick<SpellChoice>(
+      spells,
+      (c) => same(c.ids, usual),
+      weights,
+      prior,
+      kOf(priors.spells),
+      oppExtra,
+      tuning
+    )
+    if (best) {
+      next.spells = best.choice.ids
+      notes.push({
+        kind: 'spells',
+        label: best.choice.ids.map(spellName).join(' + '),
+        reason: why(best, vsReason(best.choice))
       })
     }
   }

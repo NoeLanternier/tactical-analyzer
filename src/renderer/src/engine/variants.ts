@@ -75,7 +75,33 @@ export const CONTEXT_LABEL: Partial<Record<SituationContext, [string, string]>> 
   tank: ['vs tanks', 'vs tanks'],
   cc: ['vs contrôles', 'vs CC'],
   allyAp: ['avec alliés AP', 'with AP allies'],
-  allyAd: ['avec alliés AD', 'with AD allies']
+  allyAd: ['avec alliés AD', 'with AD allies'],
+  vsRanged: ['vs adversaire à distance', 'vs ranged opponent'],
+  vsMelee: ['vs adversaire de mêlée', 'vs melee opponent'],
+  vsAp: ['vs adversaire AP', 'vs AP opponent'],
+  vsAd: ['vs adversaire AD', 'vs AD opponent']
+}
+
+/**
+ * Poids du type d'adversaire direct (familles de build, runes et autres choix) : à distance ou de
+ * mêlée, dégâts surtout magiques ou physiques (en partie, d'après ses vrais objets). La collecte
+ * classe un adversaire AP à partir de 60 % de dégâts magiques, AD sous 40 %.
+ */
+export function laneWeights(
+  threat: ThreatProfile,
+  opponent: ChampInfo | null
+): Partial<Record<SituationContext, number>> {
+  if (!opponent) return {}
+  const e = threat.enemies.find((x) => x.champ.id === opponent.id)
+  const out: Partial<Record<SituationContext, number>> = {
+    vsRanged: opponent.range >= 325 ? 1 : 0,
+    vsMelee: opponent.range < 325 ? 1 : 0
+  }
+  if (e) {
+    out.vsAp = clamp01((e.ap - 0.5) / 0.2)
+    out.vsAd = clamp01((0.5 - e.ap) / 0.2)
+  }
+  return out
 }
 
 /**
@@ -182,7 +208,7 @@ export function chooseVariant(
   if (variants.length < 2) return { build, chosen: null, options: [], locked: false, reason: null }
 
   const prior = build.winRate ?? 0.5
-  const weights = contextWeights(threat)
+  const weights = { ...contextWeights(threat), ...laneWeights(threat, opponent) }
   const allyAp = threat.allyDamage?.ap ?? null
   const reasons = new Map<BuildVariant, string>()
   const topShare = Math.max(0.01, ...variants.map((v) => v.share))

@@ -11,6 +11,7 @@ import {
   type SkillChoice,
   type StartChoice,
   type BootsTimingChoice,
+  type SpellChoice,
   type RuneSpec,
   type SituationContext
 } from '../data/junglers'
@@ -413,7 +414,11 @@ const CONTEXT_KEYS: SituationContext[] = [
   'tank',
   'cc',
   'allyAp',
-  'allyAd'
+  'allyAd',
+  'vsRanged',
+  'vsMelee',
+  'vsAp',
+  'vsAd'
 ]
 /** Contextes des objets : composition adverse, et avance ou retard au moment de l'achat. */
 const ITEM_CONTEXT_KEYS: SituationContext[] = [...CONTEXT_KEYS, 'ahead', 'behind']
@@ -717,6 +722,18 @@ function parseChoices(raw: any): BuildChoices | undefined {
       })
     : []
   if (bootsT.length >= 2) out.bootsT = bootsT
+  const spells: SpellChoice[] = Array.isArray(raw.spells)
+    ? raw.spells.flatMap((x: any) => {
+        const st = parseChoiceStats(x)
+        return st &&
+          Array.isArray(x.ids) &&
+          x.ids.length === 2 &&
+          x.ids.every((i: unknown) => typeof i === 'number' && i > 0)
+          ? [{ ...st, ids: [x.ids[0], x.ids[1]] as [number, number] }]
+          : []
+      })
+    : []
+  if (spells.length >= 2) out.spells = spells
   return Object.keys(out).length ? out : undefined
 }
 

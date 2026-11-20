@@ -115,6 +115,8 @@ export interface EnemyThreat {
   itemGold: number
   bonusArmor: number
   bonusMr: number
+  /** Points de vie des objets (objets de PV : une équipe qui en empile est résistante). */
+  bonusHp: number
   kda: string
 }
 
@@ -194,6 +196,7 @@ export interface ItemStats {
   armor: number
   mr: number
   vamp: number
+  hp?: number
 }
 
 function itemStats(gd: GameData, p: LivePlayer): ItemStats {
@@ -204,6 +207,7 @@ function itemStats(gd: GameData, p: LivePlayer): ItemStats {
   let armor = 0
   let mr = 0
   let vamp = 0
+  let hp = 0
   for (const it of p.items) {
     const info = gd.items.get(it.itemID)
     if (!info) continue
@@ -214,11 +218,12 @@ function itemStats(gd: GameData, p: LivePlayer): ItemStats {
     as += s.PercentAttackSpeedMod ?? 0
     armor += s.FlatArmorMod ?? 0
     mr += s.FlatSpellBlockMod ?? 0
+    hp += s.FlatHPPoolMod ?? 0
     vamp += s.PercentLifeStealMod ?? 0
     if (/omnivamp|vol de vie|life ?steal|heal/i.test(info.description) && info.isLegendary)
       vamp += 0.03
   }
-  return { ap, ad, crit, as, armor, mr, vamp }
+  return { ap, ad, crit, as, armor, mr, vamp, hp }
 }
 
 /** Champions dont le passif multiplie les chances de critique (Yasuo, Yone : ×2). */
@@ -356,6 +361,7 @@ export function analyzeThreat(
         itemGold,
         bonusArmor: st.armor,
         bonusMr: st.mr,
+        bonusHp: st.hp ?? 0,
         kda: `${p.scores.kills}/${p.scores.deaths}/${p.scores.assists}`,
         focus: focusOf ? focusOf(p) : 0
       })
@@ -381,6 +387,7 @@ export function analyzeThreat(
         itemGold: 0,
         bonusArmor: 0,
         bonusMr: 0,
+        bonusHp: 0,
         kda: '',
         focus: 0
       })
@@ -401,8 +408,11 @@ export function analyzeThreat(
     enemies.reduce((s, e) => s + e.profile[dim] * (weightOf(e) / meanWeight), 0)
 
   const ap = n > 0 ? weighted((e) => e.ap) : 0.5
+  // Résistance : kit du champion, armure et RM de ses objets, et ses objets de PV (800 PV ≈ un tiers
+  // d'un objet de résistance complet).
   const tankScore =
-    total('tank') + enemies.reduce((s, e) => s + (e.bonusArmor + e.bonusMr) / 250, 0)
+    total('tank') +
+    enemies.reduce((s, e) => s + (e.bonusArmor + e.bonusMr) / 250 + e.bonusHp / 2500, 0)
   const metrics: Record<Metric, number> = {
     ap: clamp01(ap),
     ad: clamp01(1 - ap),
@@ -542,14 +552,26 @@ export function analyzeThreat(
   }
 
   // Composition alliée (information).
+  // En partie, la part magique de chaque allié suit ses vrais objets (un allié qui joue AP alors
+  // qu'il joue AD d'habitude change ce dont l'équipe manque), comme pour les adversaires.
   let allyDamage: ThreatProfile['allyDamage'] = null
-  const allyChamps = livePlayers
+  const allyAps: number[] = livePlayers
     ? livePlayers.allies
-        .map((p) => champFromLive(gd, p.rawChampionName, p.championName))
-        .filter((c): c is ChampInfo => !!c && c.id !== myChampId)
-    : allyKeys.map((k) => gd.champions.get(k)).filter((c): c is ChampInfo => !!c)
-  if (allyChamps.length >= 2) {
-    const allyAp = allyChamps.reduce((s, c) => s + profileOf(c, measured).ap, 0) / allyChamps.length
+        .filter((p) => p !== livePlayers!.me)
+        .flatMap((p) => {
+          const c = champFromLive(gd, p.rawChampionName, p.championName)
+          if (!c || c.id === myChampId) return []
+          return [
+            liveProfile(c, profileOf(c, measured), itemStats(gd, p), inventoryValue(gd, p.items))
+              .apShare
+          ]
+        })
+    : allyKeys
+        .map((k) => gd.champions.get(k))
+        .filter((c): c is ChampInfo => !!c)
+        .map((c) => profileOf(c, measured).ap)
+  if (allyAps.length >= 2) {
+    const allyAp = allyAps.reduce((s, x) => s + x, 0) / allyAps.length
     allyDamage = { ap: allyAp, ad: 1 - allyAp }
     if (allyAp < 0.25)
       notes.push(

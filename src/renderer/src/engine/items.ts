@@ -125,6 +125,10 @@ const CONTEXT_LABEL: Record<SituationContext, [string, string]> = {
   cc: ['construit vs contrôles', 'built vs CC'],
   allyAp: ['construit avec alliés AP', 'built with AP allies'],
   allyAd: ['construit avec alliés AD', 'built with AD allies'],
+  vsRanged: ['construit vs adversaire à distance', 'built vs ranged opponent'],
+  vsMelee: ['construit vs adversaire de mêlée', 'built vs melee opponent'],
+  vsAp: ['construit vs adversaire AP', 'built vs AP opponent'],
+  vsAd: ['construit vs adversaire AD', 'built vs AD opponent'],
   ahead: ['construit en avance', 'built when ahead'],
   behind: ['construit en retard', 'built when behind']
 }

@@ -20,6 +20,8 @@ export interface ChampInfo {
   readonly label: string
   tags: string[]
   info: { attack: number; defense: number; magic: number }
+  /** Portée d'attaque (325 et plus : champion à distance). */
+  range: number
 }
 
 export interface RuneInfo {
@@ -115,7 +117,13 @@ export function buildGameData(raw: RawGameData): GameData {
         attack: Number(c.info?.attack ?? 5),
         defense: Number(c.info?.defense ?? 5),
         magic: Number(c.info?.magic ?? 5)
-      }
+      },
+      // (sans statistiques Data Dragon : tireurs et mages à distance, les autres en mêlée.)
+      range:
+        Number(c.stats?.attackrange ?? enById[c.id]?.stats?.attackrange) ||
+        (Array.isArray(c.tags) && (c.tags.includes('Marksman') || c.tags.includes('Mage'))
+          ? 550
+          : 175)
     }
     champions.set(info.key, info)
     championsById.set(info.id, info)

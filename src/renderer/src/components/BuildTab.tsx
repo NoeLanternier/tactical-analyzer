@@ -10,6 +10,7 @@ import { AdviceCard, PickVerdictCard } from './AdviceCard'
 import { levelName } from '../engine/metaLevel'
 import { isMode, roleLabel } from '../engine/role'
 import { MODES } from '../../../shared/modes'
+import { spellName } from '../data/spells'
 import { RIOT_COMPLIANT } from '../../../shared/edition'
 import {
   AUGMENT_LEVELS,
@@ -355,7 +356,8 @@ const CHOICE_LABEL: Record<string, [string, string]> = {
   pet: ['Familier', 'Pet'],
   skills: ['Compétences', 'Skills'],
   start: ['Départ', 'Start'],
-  bootsT: ['Bottes', 'Boots']
+  bootsT: ['Bottes', 'Boots'],
+  spells: ['Sorts', 'Spells']
 }
 
 /** Runes, bottes, familier, compétences ou départ changés pour cette partie, et pourquoi. */
@@ -678,6 +680,11 @@ export function BuildTab({ t }: { t: TactiqueState }): ReactElement | null {
             {build.skills && (
               <Chip>
                 {tr('Montée', 'Skills')} {build.skills.replace(/>/g, ' > ')}
+              </Chip>
+            )}
+            {build.spells && (
+              <Chip>
+                {tr('Sorts', 'Spells')} {build.spells.map(spellName).join(' + ')}
               </Chip>
             )}
             {build.games && !t.genericBuild && (

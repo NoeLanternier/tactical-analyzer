@@ -76,6 +76,8 @@ export interface JunglerBuild {
    * entre le 1er et le 2e, ou après. Absent : après le 1er objet.
    */
   bootsTiming?: BootsTiming
+  /** Sorts d'invocateur retenus pour la partie (voir engine/choices). */
+  spells?: [number, number]
 }
 
 /** Moment des bottes : avant le 1er objet (early), entre le 1er et le 2e (first), après (later). */
@@ -125,6 +127,8 @@ export type SkillChoice = ChoiceStats & { value: string }
 /** Départ : objets achetés en début de partie (noms anglais). */
 export type StartChoice = ChoiceStats & { items: string[] }
 export type BootsTimingChoice = ChoiceStats & { value: BootsTiming }
+/** Sorts d'invocateur : paire d'identifiants Riot (triée). */
+export type SpellChoice = ChoiceStats & { ids: [number, number] }
 
 export interface BuildChoices {
   runes?: RuneChoice[]
@@ -133,6 +137,7 @@ export interface BuildChoices {
   skills?: SkillChoice[]
   start?: StartChoice[]
   bootsT?: BootsTimingChoice[]
+  spells?: SpellChoice[]
 }
 
 /** Une famille de build d'un champion : tout ce qui change selon le premier objet. */
@@ -164,7 +169,20 @@ export interface BuildVariant {
  * et, pour les objets, avance ou retard de l'équipe au moment de l'achat.
  */
 export type SituationContext =
-  'all' | 'ap' | 'ad' | 'heal' | 'tank' | 'cc' | 'allyAp' | 'allyAd' | 'ahead' | 'behind'
+  | 'all'
+  | 'ap'
+  | 'ad'
+  | 'heal'
+  | 'tank'
+  | 'cc'
+  | 'allyAp'
+  | 'allyAd'
+  | 'vsRanged'
+  | 'vsMelee'
+  | 'vsAp'
+  | 'vsAd'
+  | 'ahead'
+  | 'behind'
 
 export interface SituationalStats {
   /** Nombre de parties du champion dans ce contexte. */

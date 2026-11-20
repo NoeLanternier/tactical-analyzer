@@ -31,6 +31,8 @@ export interface Priors {
   bootsT: number
   /** Choix (départ, bottes, clé de voûte, famille…) face à l'adversaire direct. */
   choiceVs: number
+  /** Sorts d'invocateur (paire). */
+  spells: number
   /** Objet comparé aux autres objets achetés au même rang. */
   slot: number
   /** Points de taux gagnés quand la part d'une option double. */
@@ -55,6 +57,7 @@ export const DEFAULT_PRIORS: Priors = {
   choiceCtx: 3000,
   bootsT: 3000,
   choiceVs: 5000,
+  spells: 3000,
   slot: 1000,
   slope: { item: 0.003, skills: 0.003, start: 0.003 }
 }
