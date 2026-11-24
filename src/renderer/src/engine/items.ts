@@ -984,8 +984,9 @@ export function buildItemPlan(
   } else if (me && ownedLegendaries.length >= MAX_LEGENDARIES) {
     // Build terminé : si la partie a changé au point qu'un objet ne sert plus (anti-soins face à
     // une équipe qui ne soigne pas, objet offensif face à un adversaire très en avance…), échange
-    // conseillé, revente comprise ; sinon l'or restant sert à un élixir.
-    const swap = swapOf()
+    // conseillé, revente comprise, à condition que les échanges conseillés fassent gagner sur les
+    // parties du lendemain (nextModel.swaps) ; sinon l'or restant sert à un élixir.
+    const swap = nextModel.swaps ? swapOf() : null
     if (swap) {
       const refund = Math.round(SELL_RATIO * swap.sell.total)
       const remaining = Math.max(0, swap.buy.total - refund)

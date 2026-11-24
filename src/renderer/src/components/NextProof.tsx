@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import type { NextBacktest, NextGain, SwapBacktest } from '../engine/catalog'
+import { swapsHelp, type NextBacktest, type NextGain, type SwapBacktest } from '../engine/catalog'
 import type { NextModel } from '../engine/nextItems'
 import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
 
@@ -103,6 +103,11 @@ export function NextProof({
             ` par rapport à rien changer (± ${fmtNumber(2 * swap.gain.se * 100, 1)})`,
             ` vs no change (± ${fmtNumber(2 * swap.gain.se * 100, 1)})`
           )}
+          {!swapsHelp(swap) &&
+            tr(
+              ' : pas proposés tant qu’ils ne font pas nettement gagner.',
+              ': not suggested until they clearly win more.'
+            )}
         </p>
       )}
       <p className="text-slate-500">

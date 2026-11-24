@@ -20,6 +20,8 @@ export interface NextModel {
   /** Réglé par le backtest (sinon : valeurs par défaut). */
   measured: boolean
   decisions: number
+  /** Échanges de fin de build mesurés gagnants (voir swapsHelp) : sinon, jamais proposés. */
+  swaps?: boolean
 }
 
 export const DEFAULT_NEXT_MODEL: NextModel = {

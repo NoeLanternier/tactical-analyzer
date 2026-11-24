@@ -21,7 +21,9 @@ ARAM, ARAM: Mayhem and rotating modes (URF, ARURF, One for All…).
   Summoner spells are suggested too, from your direct opponent's type (ranged or melee, AP or AD) and
   the game. Once the build is complete, the
   build panel can suggest replacing an item that no longer fits the game (sell value and missing gold
-  shown). This advice is checked every night against the next day's games (result shown in Settings).
+  shown), but only while this advice is shown to win games: it is checked every night against the next
+  day's games (result shown in Settings), and is currently off on Summoner's Rift, where every sell-and-buy
+  went with losing.
 - **Post-game review**: farm, gold and level against your direct opponent, build compared with the
   suggestion at each purchase, deaths, objectives and vision, against benchmarks of your role and rank
   (in ARAM and the other modes: damage and gold per minute, damage share, deaths and build, against

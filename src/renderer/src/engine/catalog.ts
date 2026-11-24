@@ -351,6 +351,8 @@ export function mergeOverride(
   }
   const generatedAt = typeof raw?.generatedAt === 'string' ? raw.generatedAt : null
   const sampleGames = typeof raw?.sampleGames === 'number' ? raw.sampleGames : null
+  const backtest = parseBacktest(raw?.backtest) ?? base.backtest
+  const nextModel = parseNextModel(raw?.nextModel) ?? base.nextModel
   return {
     catalog: {
       patch,
@@ -364,8 +366,8 @@ export function mergeOverride(
         ? base.itemCounters
         : (parseItemCounters(raw?.itemCounters) ?? base.itemCounters),
       tuning: parseTuning(raw?.tuning) ?? base.tuning,
-      backtest: parseBacktest(raw?.backtest) ?? base.backtest,
-      nextModel: parseNextModel(raw?.nextModel) ?? base.nextModel,
+      backtest,
+      nextModel: nextModel && { ...nextModel, swaps: swapsHelp(backtest?.swap) },
       priors: priors ?? base.priors,
       fit: parseFit(raw?.fit) ?? base.fit,
       features: parseFeatures(raw?.features) ?? base.features,
@@ -767,6 +769,19 @@ function parseBacktest(raw: any): BacktestSummary | undefined {
     ...(parseNextBacktest(raw.next) ? { next: parseNextBacktest(raw.next) } : {}),
     ...(parseSwap(raw.swap) ? { swap: parseSwap(raw.swap) } : {})
   }
+}
+
+/** Échanges conseillés et suivis nécessaires avant de croire leur gain. */
+export const SWAP_MIN_FOLLOWED = 100
+
+/**
+ * Échanges de fin de build proposés seulement s'ils font nettement gagner, mesuré sur les parties
+ * du lendemain. Novembre 2026 : −5,9 points sur la Faille pour les échanges conseillés et suivis,
+ * −8 à −10 pour les autres échanges, +1 pour rien changer : vendre va avec la défaite (on vend
+ * quand la partie tourne mal), et rien ne montre qu'un échange fasse gagner.
+ */
+export function swapsHelp(sw?: SwapBacktest): boolean {
+  return !!sw?.gain && sw.followed >= SWAP_MIN_FOLLOWED && sw.gain.gain - 2 * sw.gain.se > 0
 }
 
 function parseSwap(raw: any): SwapBacktest | undefined {
