@@ -1,5 +1,15 @@
 import type { ReactElement } from 'react'
-import { swapsHelp, type NextBacktest, type NextGain, type SwapBacktest } from '../engine/catalog'
+import {
+  harmful,
+  proven,
+  swapsHelp,
+  type ChoiceProof,
+  type DefenseProof,
+  type NextBacktest,
+  type NextGain,
+  type ProvenChoice,
+  type SwapBacktest
+} from '../engine/catalog'
 import type { NextModel } from '../engine/nextItems'
 import { fmtNumber, fmtPct, tr } from '../../../shared/i18n'
 
@@ -26,16 +36,47 @@ function usedGain(bt: NextBacktest, model?: NextModel): NextGain | null {
  * Preuve hors échantillon de l'objet suivant (3e au 6e objet) : conseils de la méta de la veille
  * jugés sur les parties Master+ du lendemain, à or égal (voir tactique-meta, src/nextItems.mjs).
  */
+const CHOICE_LABEL: Record<ProvenChoice, [string, string]> = {
+  runes: ['Runes', 'Runes'],
+  boots: ['Bottes', 'Boots'],
+  start: ['Départ', 'Start'],
+  skills: ['Compétences', 'Skills'],
+  pet: ['Familier', 'Pet'],
+  bootsT: ['Moment des bottes', 'Boots timing'],
+  spells: ['Sorts', 'Spells']
+}
+const DEFENSE_LABEL: Record<keyof DefenseProof, [string, string]> = {
+  fedAp: ['RM face à une menace magique', 'MR vs a magic threat'],
+  fedAd: ['armure face à une menace physique', 'armor vs a physical threat'],
+  behind: ['défense quand l’équipe est en retard', 'defense when the team is behind']
+}
+
+/** Gain mesuré en ligne courte : « +1,2 pt (± 0,8) ». */
+function GainText({ g }: { g: NextGain }): ReactElement {
+  return (
+    <>
+      <b className={tone(g)}>{pts(g.gain)}</b>
+      {` (± ${fmtNumber(2 * g.se * 100, 1)})`}
+    </>
+  )
+}
+
 export function NextProof({
   bt,
   model,
   swap,
+  choices,
+  defense,
   compact = false
 }: {
   bt?: NextBacktest
   model?: NextModel
   /** Échanges en fin de build conseillés, jugés de la même façon. */
   swap?: SwapBacktest
+  /** Runes, bottes, départ… : option conseillée suivie ou non (backtest.choices). */
+  choices?: Partial<Record<ProvenChoice, ChoiceProof>>
+  /** Défense face à une menace, mesurée à avance égale (meta.defense). */
+  defense?: DefenseProof
   compact?: boolean
 }): ReactElement | null {
   const g = bt ? usedGain(bt, model) : null
@@ -90,6 +131,50 @@ export function NextProof({
             `Écarts prévus retrouvés à ${fmtPct(Math.max(0, bt.calibration.slope))} (100 % : prévisions exactes)`,
             `Predicted gaps found at ${fmtPct(Math.max(0, bt.calibration.slope))} (100%: exact predictions)`
           )}
+        </p>
+      )}
+      {bt.ranks?.['1'] && (
+        <p>
+          {tr('2e objet ', '2nd item ')}
+          <GainText g={bt.ranks['1']} />
+          {model?.second
+            ? tr(' : peut remplacer celui du cœur.', ': may replace the core one.')
+            : tr(
+                ' : celui du cœur reste tant que ce n’est pas nettement gagnant.',
+                ': the core one stays until this clearly wins.'
+              )}
+        </p>
+      )}
+      {choices && Object.keys(choices).length > 0 && (
+        <p>
+          {tr(
+            'Choix de début de partie conseillés, suivis : ',
+            'Suggested start-of-game choices, followed: '
+          )}
+          {(Object.keys(choices) as ProvenChoice[]).map((k, i) => (
+            <span key={k}>
+              {i > 0 && ' · '}
+              {tr(CHOICE_LABEL[k][0], CHOICE_LABEL[k][1])} <GainText g={choices[k]!} />
+              {harmful(choices[k], 1000) && tr(' → option la plus jouée', ' → most played option')}
+            </span>
+          ))}
+        </p>
+      )}
+      {defense && Object.keys(defense).length > 0 && (
+        <p>
+          {tr(
+            'Défense en situation de menace (à or égal) : ',
+            'Defense under threat (at equal gold): '
+          )}
+          {(Object.keys(defense) as (keyof DefenseProof)[]).map((k, i) => (
+            <span key={k}>
+              {i > 0 && ' · '}
+              {tr(DEFENSE_LABEL[k][0], DEFENSE_LABEL[k][1])} <GainText g={defense[k]!} />
+              {proven(defense[k], 100)
+                ? tr(' → prioritaire', ' → prioritized')
+                : tr(' → pas prioritaire', ' → not prioritized')}
+            </span>
+          ))}
         </p>
       )}
       {swap?.gain && (

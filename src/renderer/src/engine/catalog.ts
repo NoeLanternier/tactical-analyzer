@@ -160,6 +160,11 @@ export interface Catalog {
   backtest?: BacktestSummary
   /** Objet suivant : poids de la popularité et calibration, réglés par le backtest. */
   nextModel?: NextModel
+  /**
+   * Défense face à une menace, mesurée à avance égale (adversaire très en avance ou qui te tue,
+   * selon ses dégâts ; équipe en retard) : achats défensifs adaptés moins les autres.
+   */
+  defense?: DefenseProof
   /** Niveau de jeu des statistiques des junglers et des repères (méta distante). */
   statsBracket?: 'master' | 'gold'
   /** Force de lissage de chaque famille de statistiques, mesurée par la collecte. */
@@ -209,6 +214,8 @@ export interface BacktestSummary {
   next?: NextBacktest
   /** Échanges en fin de build conseillés, jugés de la même façon. */
   swap?: SwapBacktest
+  /** Runes, bottes, départ, compétences… : option conseillée suivie ou non, à champion égal. */
+  choices?: Partial<Record<ProvenChoice, ChoiceProof>>
 }
 
 /**
@@ -229,8 +236,27 @@ export interface NextGain {
   gain: number
   se: number
 }
+/** Situations où la défense est mesurée (voir Catalog.defense). */
+export type DefenseKind = 'fedAp' | 'fedAd' | 'behind'
+export type DefenseProof = Partial<Record<DefenseKind, NextGain>>
+/** Choix de début de partie vérifiés sur les parties du lendemain (backtest.choices). */
+export type ProvenChoice = 'runes' | 'boots' | 'start' | 'skills' | 'pet' | 'bootsT' | 'spells'
+export const PROVEN_CHOICES: ProvenChoice[] = [
+  'runes',
+  'boots',
+  'start',
+  'skills',
+  'pet',
+  'bootsT',
+  'spells'
+]
+/** Conseil suivi ou non pour un type de choix ; `switched` : quand l'app changeait d'option. */
+export type ChoiceProof = NextGain & { switched?: NextGain }
+
 export interface NextBacktest {
   decisions: number
+  /** Gain par rang avec le poids retenu ('1' : 2e objet… '5' : 6e objet). */
+  ranks?: Record<string, NextGain>
   gammas: (Partial<NextGain> & { gamma: number })[]
   /** Victoires en plus observées par point d'écart prévu (1 : bien calibré). */
   calibration: { slope: number; se: number } | null
@@ -353,6 +379,9 @@ export function mergeOverride(
   const sampleGames = typeof raw?.sampleGames === 'number' ? raw.sampleGames : null
   const backtest = parseBacktest(raw?.backtest) ?? base.backtest
   const nextModel = parseNextModel(raw?.nextModel) ?? base.nextModel
+  const defense = parseDefense(raw?.defense) ?? base.defense
+  // Choix de début de partie mesurés perdants : option la plus jouée, sans changement selon la partie.
+  applyChoiceProofs(builds, backtest?.choices)
   return {
     catalog: {
       patch,
@@ -367,7 +396,15 @@ export function mergeOverride(
         : (parseItemCounters(raw?.itemCounters) ?? base.itemCounters),
       tuning: parseTuning(raw?.tuning) ?? base.tuning,
       backtest,
-      nextModel: nextModel && { ...nextModel, swaps: swapsHelp(backtest?.swap) },
+      // Réglages vérifiés sur les parties du lendemain : échanges de fin de build, 2e objet du cœur
+      // remplaçable, défense prioritaire face à une menace.
+      nextModel: nextModel && {
+        ...nextModel,
+        swaps: swapsHelp(backtest?.swap),
+        second: proven(backtest?.next?.ranks?.['1']),
+        defense: defenseTrust(defense)
+      },
+      defense,
       priors: priors ?? base.priors,
       fit: parseFit(raw?.fit) ?? base.fit,
       features: parseFeatures(raw?.features) ?? base.features,
@@ -767,7 +804,93 @@ function parseBacktest(raw: any): BacktestSummary | undefined {
     variant: { followed, other },
     items: { high, low },
     ...(parseNextBacktest(raw.next) ? { next: parseNextBacktest(raw.next) } : {}),
-    ...(parseSwap(raw.swap) ? { swap: parseSwap(raw.swap) } : {})
+    ...(parseSwap(raw.swap) ? { swap: parseSwap(raw.swap) } : {}),
+    ...(parseChoiceProofs(raw.choices) ? { choices: parseChoiceProofs(raw.choices) } : {})
+  }
+}
+
+/** Gain mesuré bien formé, sinon null. */
+function gainOf(g: any): NextGain | null {
+  return num(g?.followed) !== null &&
+    num(g?.other) !== null &&
+    num(g?.gain) !== null &&
+    num(g?.se) !== null
+    ? { followed: g.followed, other: g.other, gain: g.gain, se: g.se }
+    : null
+}
+
+function parseChoiceProofs(raw: any): Partial<Record<ProvenChoice, ChoiceProof>> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: Partial<Record<ProvenChoice, ChoiceProof>> = {}
+  for (const kind of PROVEN_CHOICES) {
+    const g = gainOf(raw[kind])
+    if (!g) continue
+    const sw = gainOf(raw[kind].switched)
+    out[kind] = sw ? { ...g, switched: sw } : g
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseDefense(raw: any): DefenseProof | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: DefenseProof = {}
+  for (const kind of ['fedAp', 'fedAd', 'behind'] as DefenseKind[]) {
+    const g = gainOf(raw[kind])
+    if (g) out[kind] = g
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/** Nettement gagnant : gain moins deux erreurs types au-dessus de 0, sur assez de cas de chaque côté. */
+export const proven = (g: NextGain | null | undefined, min = 300): boolean =>
+  !!g && g.followed >= min && g.other >= min && g.gain - 2 * g.se > 0
+/** Nettement perdant : gain plus deux erreurs types sous 0. */
+export const harmful = (g: NextGain | null | undefined, min = 300): boolean =>
+  !!g && g.followed >= min && g.other >= min && g.gain + 2 * g.se < 0
+
+/**
+ * Défense prioritaire dans les règles seulement là où la collecte l'a mesurée gagnante (1), sinon
+ * pas (0). Méta sans cette mesure (ancienne) : comme avant (1 partout).
+ */
+export function defenseTrust(d?: DefenseProof): NonNullable<NextModel['defense']> {
+  if (!d) return { fedAp: 1, fedAd: 1, behind: 1 }
+  return {
+    fedAp: proven(d.fedAp, 100) ? 1 : 0,
+    fedAd: proven(d.fedAd, 100) ? 1 : 0,
+    behind: proven(d.behind, 100) ? 1 : 0
+  }
+}
+
+/**
+ * Choix de début de partie mesurés perdants sur les parties du lendemain : option du build
+ * nettement perdante → l'option la plus jouée la remplace ; changement d'option selon le contexte
+ * nettement perdant → l'app ne change plus d'option pour ce choix (build.choiceLock).
+ */
+function applyChoiceProofs(
+  builds: Map<string, JunglerBuild>,
+  proofs?: Partial<Record<ProvenChoice, ChoiceProof>>
+): void {
+  if (!proofs) return
+  const usualBad = PROVEN_CHOICES.filter((k) => harmful(proofs[k], 1000))
+  const lock = PROVEN_CHOICES.filter(
+    (k) => usualBad.includes(k) || harmful(proofs[k]?.switched, 100)
+  )
+  if (!lock.length) return
+  for (const [id, b] of builds) {
+    const next: JunglerBuild = { ...b, choiceLock: lock }
+    const top = <T extends { share: number }>(list?: T[]): T | undefined =>
+      list && list.length ? [...list].sort((x, y) => y.share - x.share)[0] : undefined
+    const c = b.choices
+    for (const k of usualBad) {
+      if (k === 'runes' && top(c?.runes)) next.runes = top(c?.runes)!.runes
+      if (k === 'boots' && top(c?.boots)) next.boots = top(c?.boots)!.name
+      if (k === 'start' && top(c?.start)) next.start = top(c?.start)!.items
+      if (k === 'skills' && top(c?.skills)) next.skills = top(c?.skills)!.value
+      if (k === 'pet' && top(c?.pet)) next.pet = top(c?.pet)!.name as JunglerBuild['pet']
+      if (k === 'bootsT' && top(c?.bootsT)) next.bootsTiming = top(c?.bootsT)!.value
+      if (k === 'spells' && top(c?.spells)) next.spells = top(c?.spells)!.ids
+    }
+    builds.set(id, next)
   }
 }
 
@@ -819,7 +942,15 @@ function parseNextBacktest(raw: any): NextBacktest | undefined {
       num(raw.calibration?.slope) !== null && num(raw.calibration?.se) !== null
         ? { slope: raw.calibration.slope, se: raw.calibration.se }
         : null,
-    old: gain(raw.old)
+    old: gain(raw.old),
+    ...(() => {
+      const ranks: Record<string, NextGain> = {}
+      for (const [k, g] of Object.entries<any>(raw.ranks ?? {})) {
+        const v = gain(g)
+        if (v) ranks[k] = v
+      }
+      return Object.keys(ranks).length ? { ranks } : {}
+    })()
   }
 }
 

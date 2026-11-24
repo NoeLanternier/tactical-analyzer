@@ -12,8 +12,12 @@ ARAM, ARAM: Mayhem and rotating modes (URF, ARURF, One for All…).
   builds (same map, same items) without a rune page.
 - **Runes and items**: a rune page and an item order adapted to the enemy team, sent to the client as
   the app's own rune page and item set. During the game, the suggested build keeps adapting to the
-  enemy items and to your inventory (build suggestions only). Items 3 to 6 are chosen one at a time from
-  the items you already have and the game state (measured at equal gold on collected games); the start,
+  enemy items and to your inventory (build suggestions only). Items 2 to 6 are chosen one at a time from
+  the items you already have and the game state (measured at equal gold on collected games; the 2nd core
+  item is only replaced once this is shown to win on the next day's games). Against a main threat (an
+  enemy with far more items than their team, or the one causing most of your recent deaths), defense is
+  prioritized only where collected games show it wins. Rune, boots, start and skill suggestions are also
+  checked every night against the next day's games; the start,
   boots (and when to buy them), keystone and build family also account for your direct opponent and
   for your own team's damage profile. In game, each enemy's actual items progressively replace their usual
   profile (a lethality Miss Fortune is not treated as a crit threat), and the same goes for your allies;

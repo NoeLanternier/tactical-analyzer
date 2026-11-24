@@ -301,6 +301,12 @@ const NEXT_CAP = 1.2
  * 0,5 à 0,4 le 20 novembre 2026, une fois l'objet suivant vérifié sur plus de 365 000 achats.
  */
 const NEXT_SWAP = 0.4
+/**
+ * Écart de score pour remplacer le 2e objet du cœur (≈ 2 points de victoire mesurés) : plus que pour
+ * le 3e, la famille de build reposant sur ses deux premiers objets. Seulement si l'objet suivant est
+ * vérifié pour le 2e objet sur les parties du lendemain (nextModel.second).
+ */
+const NEXT_SECOND = 0.5
 /** Un objet se revend 70 % de son prix. */
 const SELL_RATIO = 0.7
 /**
@@ -450,10 +456,30 @@ function bestComponent(
   return best
 }
 
+/**
+ * Menace vue par les règles écrites à la main : la défense face à un adversaire très en avance (ou
+ * qui te tue), ou quand l'équipe est en retard, n'y est prioritaire que là où la collecte a mesuré
+ * qu'elle fait gagner (nextModel.defense) ; ailleurs, seules les mesures de l'objet suivant, qui
+ * tiennent compte de ces situations, décident.
+ */
+export function ruleThreat(threat: ThreatProfile, trust?: NextModel['defense']): ThreatProfile {
+  if (!trust) return threat
+  const m = threat.metrics
+  return {
+    ...threat,
+    metrics: {
+      ...m,
+      fedAp: m.fedAp * trust.fedAp,
+      fedAd: m.fedAd * trust.fedAd,
+      behind: m.behind * trust.behind
+    }
+  }
+}
+
 export function buildItemPlan(
   gd: GameData,
   build: JunglerBuild,
-  threat: ThreatProfile,
+  liveThreat: ThreatProfile,
   me: LivePlayer | null,
   currentGold: number,
   personal?: PersonalItemBonus,
@@ -461,6 +487,8 @@ export function buildItemPlan(
   counterWeight = 1,
   nextModel: NextModel = DEFAULT_NEXT_MODEL
 ): ItemPlan {
+  // Règles : défense prioritaire seulement si mesurée gagnante ; mesures : la partie telle quelle.
+  const threat = ruleThreat(liveThreat, nextModel.defense)
   const unresolved: string[] = []
   const resolve = (name: string): ItemInfo | undefined => {
     const it = gd.itemsByName.get(norm(name))
@@ -564,7 +592,7 @@ export function buildItemPlan(
   // Objet suivant mesuré (3e au 6e objet) : classement des candidats après les objets `taken`
   // (et ceux possédés hors plan), selon la partie, corrigé par les règles, les adversaires précis
   // et tes parties. `extra` : candidats en plus de la réserve (le 3e objet du cœur).
-  const contexts = nextContexts(threat)
+  const contexts = nextContexts(liveThreat)
   const emergency = Math.max(m.fedAp, m.fedAd, m.behind)
   // Poids des règles écrites à la main : faible en partie calme (les mesures, vérifiées chaque
   // nuit, décident ; 0,25 avant le 20 novembre 2026), entier en cas d'urgence.
@@ -633,9 +661,41 @@ export function buildItemPlan(
   //   face à une équipe presque entièrement AP).
   // Avec l'objet suivant mesuré : le 3e objet n'est remplacé que si un autre gagne nettement plus
   // après les deux premiers, dans cette partie (adversaire très en avance, composition…).
+  // 2e objet : remplacé seulement si un autre gagne nettement plus après le 1er, dans cette partie
+  // (s'il s'agit du 3e objet du cœur, les deux échangent leur place).
+  if (
+    nextStats &&
+    nextModel.second &&
+    coreSteps.length >= 2 &&
+    !ownsId(coreSteps[1].item.id) &&
+    !coreSteps.slice(2).some((s) => ownsId(s.item.id))
+  ) {
+    const second = coreSteps[1].item
+    const ranked = rankNext(core.slice(0, 1), [second, ...core.slice(2)])
+    const best = ranked[0]
+    const secondScore = ranked.find((s) => s.item.id === second.id)?.score ?? -Infinity
+    if (best && best.item.id !== second.id && best.score - secondScore >= NEXT_SECOND) {
+      const later = coreSteps.findIndex((s, i) => i >= 2 && s.item.id === best.item.id)
+      if (later >= 0) coreSteps[later] = { item: second, kind: 'core', owned: false }
+      else {
+        pool.delete(best.item.id)
+        pool.set(second.id, second)
+      }
+      coreSteps[1] = {
+        item: best.item,
+        kind: 'core',
+        owned: false,
+        reason: best.reason,
+        swapped: true
+      }
+    }
+  }
   if (nextStats && coreSteps.length === 3 && !ownsId(coreSteps[2].item.id)) {
     const third = coreSteps[2].item
-    const ranked = rankNext(core.slice(0, 2), [third])
+    const ranked = rankNext(
+      coreSteps.slice(0, 2).map((s) => s.item),
+      [third]
+    )
     const best = ranked[0]
     const thirdScore = ranked.find((s) => s.item.id === third.id)?.score ?? -Infinity
     if (best && best.item.id !== third.id && best.score - thirdScore >= NEXT_SWAP) {

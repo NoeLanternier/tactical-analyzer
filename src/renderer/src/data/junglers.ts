@@ -35,6 +35,11 @@ export interface StartOption {
 }
 
 export interface JunglerBuild {
+  /**
+   * Choix que l'app ne change plus selon la partie (mesurés perdants sur les parties du lendemain,
+   * voir catalog.ts applyChoiceProofs).
+   */
+  choiceLock?: ('runes' | 'boots' | 'start' | 'skills' | 'pet' | 'bootsT' | 'spells')[]
   /** Identifiant Data Dragon. */
   id: string
   archetype: Archetype

@@ -395,14 +395,12 @@ export function analyzeThreat(
   }
 
   const n = enemies.length
-  const totalPower = enemies.reduce((s, e) => s + e.power, 0) || 1
   // Poids de chaque adversaire : son avance, et sa part dans tes morts récentes.
   const weightOf = (e: EnemyThreat): number => threatWeight(e)
   const totalWeight = enemies.reduce((s, e) => s + weightOf(e), 0) || 1
   const weighted = (fn: (e: EnemyThreat) => number): number =>
     enemies.reduce((s, e) => s + fn(e) * weightOf(e), 0) / totalWeight
   // Somme des intensités, pondérée par l'avance de chaque adversaire.
-  const mean = totalPower / Math.max(n, 1)
   const meanWeight = totalWeight / Math.max(n, 1)
   const total = (dim: 'tank' | 'cc' | 'heal' | 'shield' | 'burst' | 'crit' | 'aa'): number =>
     enemies.reduce((s, e) => s + e.profile[dim] * (weightOf(e) / meanWeight), 0)
@@ -437,12 +435,24 @@ export function analyzeThreat(
   let focus: EnemyThreat | null = null
   let goldDiff = 0
   if (livePlayers && n > 0) {
-    const top = [...enemies].sort((a, b) => b.power - a.power)[0]
-    const fedness = clamp01((top.power / mean - 1.15) / 0.6)
-    if (fedness > 0 && top.itemGold >= 2500) {
+    // Adversaire très en avance, défini comme dans la collecte (tactique-meta, threatContexts) pour
+    // que les effets mesurés s'appliquent à la même situation : celui qui a le plus d'objets, s'il
+    // en a 30 % de plus que la moyenne de son équipe et 1 500 pièces d'or d'écart (prise en compte
+    // progressive à partir de 20 % et 1 000). Dégâts magiques à partir de 60 %, physiques jusqu'à
+    // 40 % (ses objets du moment comptés, voir liveProfile).
+    const meanGold = enemies.reduce((s, e) => s + e.itemGold, 0) / n
+    const top = [...enemies].sort((a, b) => b.itemGold - a.itemGold)[0]
+    const fedness =
+      meanGold > 0
+        ? clamp01((top.itemGold / meanGold - 1.2) / 0.1) *
+          clamp01((top.itemGold - meanGold - 1000) / 500)
+        : 0
+    const apW = (e: EnemyThreat): number => clamp01((e.ap - 0.5) / 0.1)
+    const adW = (e: EnemyThreat): number => clamp01((0.5 - e.ap) / 0.1)
+    if (fedness > 0) {
       fed = top
-      metrics.fedAp = clamp01(fedness * top.ap * 1.3)
-      metrics.fedAd = clamp01(fedness * (1 - top.ap) * 1.3)
+      metrics.fedAp = fedness * apW(top)
+      metrics.fedAd = fedness * adW(top)
       notes.push(
         tr(
           `${top.champ.label} a pris de l'avance (${top.kda}, ${gold(top.itemGold)} d'objets) — dégâts ${top.ap >= 0.5 ? 'magiques' : 'physiques'}.`,
@@ -450,13 +460,14 @@ export function analyzeThreat(
         )
       )
     }
-    // Adversaire qui cause la plupart de tes morts récentes : protection contre ses dégâts, même
-    // s'il n'est pas le plus en avance de son équipe.
+    // Adversaire qui cause la plupart de tes morts récentes (au moins la moitié, comme la collecte) :
+    // même situation mesurée, même s'il n'est pas le plus en avance de son équipe.
     const killer = [...enemies].sort((a, b) => b.focus - a.focus)[0]
-    if (killer && killer.focus >= 0.5) {
+    const fw = killer ? clamp01((killer.focus - 0.45) / 0.05) : 0
+    if (killer && fw > 0) {
       focus = killer
-      metrics.fedAp = Math.max(metrics.fedAp, clamp01(killer.focus * killer.ap * 0.9))
-      metrics.fedAd = Math.max(metrics.fedAd, clamp01(killer.focus * (1 - killer.ap) * 0.9))
+      metrics.fedAp = Math.max(metrics.fedAp, fw * apW(killer))
+      metrics.fedAd = Math.max(metrics.fedAd, fw * adW(killer))
       if (killer !== fed)
         notes.push(
           tr(

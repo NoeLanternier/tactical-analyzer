@@ -154,6 +154,8 @@ export function adaptChoices(
   const notes: ChoiceNote[] = []
   const next: JunglerBuild = { ...build }
   const kOf = (base: number): { base: number; ctx: number } => ({ base, ctx: priors.choiceCtx })
+  // Choix dont le changement selon la partie s'est révélé perdant le lendemain : option du build.
+  const locked = new Set(build.choiceLock ?? [])
   // Face à l'adversaire direct : écart propre mesuré (déjà lissé par la collecte).
   const opp = (c: ChoiceStats): number => (enemyJungler ? (c.opp?.[enemyJungler.id]?.[1] ?? 0) : 0)
   const oppExtra = (c: ChoiceStats): number => opp(c)
@@ -164,15 +166,17 @@ export function adaptChoices(
       : undefined
 
   // Pages de runes d'une famille de build : comparées au taux de la famille.
-  const runes = pick(
-    runeChoices ?? choices?.runes,
-    (c) => sameRunes(c.runes, build.runes),
-    weights,
-    runeChoices ? (build.winRate ?? prior) : prior,
-    kOf(priors.runes),
-    oppExtra,
-    tuning
-  )
+  const runes = locked.has('runes')
+    ? null
+    : pick(
+        runeChoices ?? choices?.runes,
+        (c) => sameRunes(c.runes, build.runes),
+        weights,
+        runeChoices ? (build.winRate ?? prior) : prior,
+        kOf(priors.runes),
+        oppExtra,
+        tuning
+      )
   if (runes) {
     next.runes = runes.choice.runes
     notes.push({
@@ -182,15 +186,17 @@ export function adaptChoices(
     })
   }
 
-  const boots = pick<NamedChoice>(
-    choices?.boots,
-    (c) => norm(c.name) === norm(build.boots),
-    weights,
-    prior,
-    kOf(priors.boots),
-    oppExtra,
-    tuning
-  )
+  const boots = locked.has('boots')
+    ? null
+    : pick<NamedChoice>(
+        choices?.boots,
+        (c) => norm(c.name) === norm(build.boots),
+        weights,
+        prior,
+        kOf(priors.boots),
+        oppExtra,
+        tuning
+      )
   if (boots) {
     next.boots = boots.choice.name
     // Bottes choisies d'après les parties de ce contexte : les règles ne les changent plus.
@@ -208,15 +214,17 @@ export function adaptChoices(
     const cell = enemyJungler ? c.vs[enemyJungler.id] : undefined
     return cell ? bayes(cell[0], cell[1], base, priors.choiceCtx) - base : 0
   }
-  const pet = pick<PetChoice>(
-    choices?.pet,
-    (c) => norm(c.name) === norm(build.pet ?? ''),
-    weights,
-    prior,
-    kOf(priors.pet),
-    vsBonus,
-    tuning
-  )
+  const pet = locked.has('pet')
+    ? null
+    : pick<PetChoice>(
+        choices?.pet,
+        (c) => norm(c.name) === norm(build.pet ?? ''),
+        weights,
+        prior,
+        kOf(priors.pet),
+        vsBonus,
+        tuning
+      )
   if (pet) {
     next.pet = pet.choice.name as Pet
     const cell = enemyJungler ? pet.choice.vs[enemyJungler.id] : undefined
@@ -234,15 +242,17 @@ export function adaptChoices(
     })
   }
 
-  const skills = pick<SkillChoice>(
-    choices?.skills,
-    (c) => c.value === build.skills,
-    weights,
-    prior,
-    kOf(priors.skills),
-    undefined,
-    tuning
-  )
+  const skills = locked.has('skills')
+    ? null
+    : pick<SkillChoice>(
+        choices?.skills,
+        (c) => c.value === build.skills,
+        weights,
+        prior,
+        kOf(priors.skills),
+        undefined,
+        tuning
+      )
   if (skills) {
     next.skills = skills.choice.value
     notes.push({
@@ -257,15 +267,17 @@ export function adaptChoices(
     !!b &&
     a.length === b.length &&
     [...a].map(norm).sort().join() === [...b].map(norm).sort().join()
-  const start = pick<StartChoice>(
-    choices?.start,
-    (c) => sameStart(c.items, build.start),
-    weights,
-    prior,
-    kOf(priors.start),
-    oppExtra,
-    tuning
-  )
+  const start = locked.has('start')
+    ? null
+    : pick<StartChoice>(
+        choices?.start,
+        (c) => sameStart(c.items, build.start),
+        weights,
+        prior,
+        kOf(priors.start),
+        oppExtra,
+        tuning
+      )
   if (start) {
     next.start = start.choice.items
     notes.push({
@@ -280,15 +292,17 @@ export function adaptChoices(
   if (timings?.length) {
     const usual = build.bootsTiming ?? [...timings].sort((a, b) => b.share - a.share)[0].value
     next.bootsTiming = usual
-    const timing = pick<BootsTimingChoice>(
-      timings,
-      (c) => c.value === usual,
-      weights,
-      prior,
-      kOf(priors.bootsT),
-      oppExtra,
-      tuning
-    )
+    const timing = locked.has('bootsT')
+      ? null
+      : pick<BootsTimingChoice>(
+          timings,
+          (c) => c.value === usual,
+          weights,
+          prior,
+          kOf(priors.bootsT),
+          oppExtra,
+          tuning
+        )
     if (timing) {
       next.bootsTiming = timing.choice.value
       notes.push({
@@ -307,15 +321,17 @@ export function adaptChoices(
       [...a].sort((x, y) => x - y).join() === [...b].sort((x, y) => x - y).join()
     const usual = build.spells ?? [...spells].sort((a, b) => b.share - a.share)[0].ids
     next.spells = usual
-    const best = pick<SpellChoice>(
-      spells,
-      (c) => same(c.ids, usual),
-      weights,
-      prior,
-      kOf(priors.spells),
-      oppExtra,
-      tuning
-    )
+    const best = locked.has('spells')
+      ? null
+      : pick<SpellChoice>(
+          spells,
+          (c) => same(c.ids, usual),
+          weights,
+          prior,
+          kOf(priors.spells),
+          oppExtra,
+          tuning
+        )
     if (best) {
       next.spells = best.choice.ids
       notes.push({

@@ -22,6 +22,13 @@ export interface NextModel {
   decisions: number
   /** Échanges de fin de build mesurés gagnants (voir swapsHelp) : sinon, jamais proposés. */
   swaps?: boolean
+  /** Objet suivant vérifié pour le 2e objet (backtest.next.ranks['1']) : il peut remplacer celui du cœur. */
+  second?: boolean
+  /**
+   * Défense prioritaire dans les règles face à une menace (1 : mesurée gagnante, 0 : non), par
+   * situation (voir catalog.ts defenseTrust). Absent : comme avant (1).
+   */
+  defense?: { fedAp: number; fedAd: number; behind: number }
 }
 
 export const DEFAULT_NEXT_MODEL: NextModel = {
